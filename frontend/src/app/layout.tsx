@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import AppHeader from "./components/AppHeader";
+import { ToastProvider } from "./components/Toast";
 
 export const metadata: Metadata = {
   title: "Mana Forge",
@@ -15,8 +16,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <AppHeader />
-        {children}
+        <ToastProvider>
+          <AppHeader />
+          {children}
+        </ToastProvider>
       </body>
     </html>
   );

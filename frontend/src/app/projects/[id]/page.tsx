@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useToast } from '../../components/Toast';
 
 type Card = {
     id: string;
@@ -36,10 +37,16 @@ export default function ProjectEditorPage() {
     const [showImport, setShowImport] = useState(false);
     const [importText, setImportText] = useState('');
     const [importError, setImportError] = useState('');
+    const [importProgress, setImportProgress] = useState('');
 
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
     const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+
+    // Scryfall image cache: card_name -> image URL
+    const scryfallCache = useRef<Record<string, string | null>>({});
+
+    const { addToast } = useToast();
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
 
@@ -104,6 +111,7 @@ export default function ProjectEditorPage() {
 
     const handleImport = async () => {
         setImportError('');
+        setImportProgress('');
         const parsed = parseDeckList(importText);
 
         if (parsed.length === 0) {
@@ -112,18 +120,61 @@ export default function ProjectEditorPage() {
         }
 
         setSaving(true);
+        const warnings: string[] = [];
+        const validatedCards: { card_name: string; quantity: number }[] = [];
+
+        // Validate each card against Scryfall
+        for (let i = 0; i < parsed.length; i++) {
+            const card = parsed[i];
+            setImportProgress(`Validating card ${i + 1} of ${parsed.length}: ${card.card_name}...`);
+
+            try {
+                const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(card.card_name)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const scryfallName = data.name;
+                    if (scryfallName.toLowerCase() !== card.card_name.toLowerCase()) {
+                        warnings.push(`"${card.card_name}" not found — closest match "${scryfallName}" added`);
+                    }
+                    validatedCards.push({ card_name: scryfallName, quantity: card.quantity });
+                    // Cache the image while we have it
+                    const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
+                    scryfallCache.current[scryfallName] = imgUrl;
+                } else {
+                    warnings.push(`"${card.card_name}" not found on Scryfall — added as-is`);
+                    validatedCards.push(card);
+                }
+            } catch {
+                // Network error, just add as-is
+                validatedCards.push(card);
+            }
+
+            // Scryfall asks for 50-100ms between requests
+            if (i < parsed.length - 1) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+        }
+
+        setImportProgress('Saving to project...');
+
         try {
             const res = await fetch(`${apiUrl}/api/projects/${projectId}/cards`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ cards: parsed })
+                body: JSON.stringify({ cards: validatedCards })
             });
             const data = await res.json();
             if (data.success) {
                 setShowImport(false);
                 setImportText('');
+                setImportProgress('');
                 fetchProject();
+                addToast(`${validatedCards.length} card(s) imported successfully!`, 'success');
+                // Show warnings as individual toasts
+                for (const w of warnings) {
+                    addToast(w, 'warning', 8000);
+                }
             } else {
                 setImportError(data.error || 'Failed to import cards');
             }
@@ -131,6 +182,7 @@ export default function ProjectEditorPage() {
             setImportError(err.message);
         } finally {
             setSaving(false);
+            setImportProgress('');
         }
     };
 
@@ -311,10 +363,16 @@ export default function ProjectEditorPage() {
                                     {importError}
                                 </div>
                             )}
+                            {importProgress && (
+                                <div className="mt-2 p-2 bg-blue-50 border-l-4 border-blue-400 text-blue-700 text-sm rounded flex items-center gap-2">
+                                    <span className="animate-spin text-xs">⏳</span> {importProgress}
+                                </div>
+                            )}
                             <div className="flex justify-end gap-3 mt-4">
                                 <button
-                                    onClick={() => { setShowImport(false); setImportText(''); setImportError(''); }}
-                                    className="text-gray-600 hover:text-gray-800 font-medium text-sm px-4 py-2"
+                                    onClick={() => { setShowImport(false); setImportText(''); setImportError(''); setImportProgress(''); }}
+                                    disabled={saving}
+                                    className="text-gray-600 hover:text-gray-800 font-medium text-sm px-4 py-2 disabled:opacity-50"
                                 >
                                     Cancel
                                 </button>
@@ -323,7 +381,7 @@ export default function ProjectEditorPage() {
                                     disabled={saving || !importText.trim()}
                                     className="bg-green-600 hover:bg-green-700 text-white font-medium rounded-md text-sm px-6 py-2 transition-colors disabled:opacity-50"
                                 >
-                                    {saving ? 'Importing...' : 'Import Cards'}
+                                    {saving ? 'Validating & Importing...' : 'Import Cards'}
                                 </button>
                             </div>
                         </div>
@@ -348,6 +406,7 @@ export default function ProjectEditorPage() {
                             <thead className="bg-blue-100/50">
                                 <tr>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">#</th>
+                                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-10">👁</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Qty</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Card Name</th>
                                     <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Order</th>
@@ -367,6 +426,7 @@ export default function ProjectEditorPage() {
                                         onMove={handleMoveCard}
                                         animateY={animatingCards[card.id] ?? 0}
                                         rowRef={(el) => { rowRefs.current[card.id] = el; }}
+                                        scryfallCache={scryfallCache}
                                     />
                                 ))}
                             </tbody>
@@ -379,7 +439,7 @@ export default function ProjectEditorPage() {
 }
 
 // ── Inline Editable Card Row ──
-function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, animateY, rowRef }: {
+function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, animateY, rowRef, scryfallCache }: {
     card: Card;
     index: number;
     isFirst: boolean;
@@ -389,15 +449,58 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
     onMove: (card: Card, direction: 'up' | 'down') => void;
     animateY: number;
     rowRef: (el: HTMLTableRowElement | null) => void;
+    scryfallCache: React.MutableRefObject<Record<string, string | null>>;
 }) {
     const [editingName, setEditingName] = useState(false);
     const [nameVal, setNameVal] = useState(card.card_name);
+    const [previewImg, setPreviewImg] = useState<string | null>(null);
+    const [previewPos, setPreviewPos] = useState({ x: 0, y: 0 });
+    const [previewLoading, setPreviewLoading] = useState(false);
+    const [showPreview, setShowPreview] = useState(false);
 
     const handleNameSave = () => {
         if (nameVal.trim() && nameVal !== card.card_name) {
             onUpdate(card, { card_name: nameVal.trim() });
         }
         setEditingName(false);
+    };
+
+    const handlePreviewEnter = async () => {
+        setShowPreview(true);
+        const name = card.card_name;
+        // Check cache first
+        if (scryfallCache.current[name] !== undefined) {
+            setPreviewImg(scryfallCache.current[name]);
+            return;
+        }
+        setPreviewLoading(true);
+        try {
+            const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
+            if (res.ok) {
+                const data = await res.json();
+                const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
+                scryfallCache.current[name] = imgUrl;
+                setPreviewImg(imgUrl);
+            } else {
+                scryfallCache.current[name] = null;
+                setPreviewImg(null);
+            }
+        } catch {
+            scryfallCache.current[name] = null;
+            setPreviewImg(null);
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    const handlePreviewMove = (e: React.MouseEvent) => {
+        setPreviewPos({ x: e.clientX - 270, y: e.clientY - 100 });
+    };
+
+    const handlePreviewLeave = () => {
+        setShowPreview(false);
+        setPreviewImg(null);
+        setPreviewLoading(false);
     };
 
     return (
@@ -412,6 +515,35 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
             }}
         >
             <td className="px-4 py-2 text-sm text-gray-400">{index + 1}</td>
+            <td className="px-2 py-2 text-center">
+                <span
+                    className="cursor-pointer text-gray-400 hover:text-blue-500 transition-colors text-sm select-none"
+                    onMouseEnter={handlePreviewEnter}
+                    onMouseMove={handlePreviewMove}
+                    onMouseLeave={handlePreviewLeave}
+                >
+                    👁
+                </span>
+                {showPreview && (
+                    <div
+                        className="fixed z-50 pointer-events-none"
+                        style={{ left: previewPos.x, top: previewPos.y }}
+                    >
+                        {previewLoading ? (
+                            <div className="bg-white rounded-lg shadow-xl border border-gray-200 p-4 text-xs text-gray-500">
+                                Loading...
+                            </div>
+                        ) : (
+                            <img
+                                src={previewImg || '/placeholder.png'}
+                                alt={card.card_name}
+                                className="rounded-lg shadow-xl border border-gray-200"
+                                style={{ width: 250, height: 'auto' }}
+                            />
+                        )}
+                    </div>
+                )}
+            </td>
             <td className="px-4 py-2">
                 <input
                     type="number"
@@ -448,13 +580,13 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
                     <button
                         onClick={() => onMove(card, 'up')}
                         disabled={isFirst}
-                        className="text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs px-1"
+                        className="cursor-pointer text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs px-1"
                         title="Move up"
                     >▲</button>
                     <button
                         onClick={() => onMove(card, 'down')}
                         disabled={isLast}
-                        className="text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs px-1"
+                        className="cursor-pointer text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs px-1"
                         title="Move down"
                     >▼</button>
                 </div>
@@ -462,7 +594,7 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
             <td className="px-4 py-2">
                 <button
                     onClick={() => onDelete(card.id)}
-                    className="text-red-400 hover:text-red-600 transition-colors text-xs font-medium"
+                    className="cursor-pointer text-red-400 hover:text-red-600 transition-colors text-xs font-medium"
                 >
                     ✕
                 </button>
