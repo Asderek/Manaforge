@@ -7,6 +7,7 @@ import { useToast } from '../../components/Toast';
 import ProxySheet from '../../components/ProxySheet';
 import CustomCardModal from '@/app/components/CustomCardModal';
 import ImportDeckModal from '@/app/components/ImportDeckModal';
+import { compressDeck } from '@/app/utils/deckSharing';
 
 type Card = {
     id: string;
@@ -334,6 +335,32 @@ export default function ProjectEditorPage() {
 
     const totalCards = project?.cards.reduce((sum, c) => sum + c.quantity, 0) ?? 0;
 
+    const handleShare = () => {
+        if (!project) return;
+        
+        const hasCustomCards = project.cards.some(c => c.custom_image);
+        
+        const portableDeck = {
+            n: project.name,
+            c: project.cards.map(c => ({
+                n: c.card_name,
+                q: c.quantity,
+                // We strip the image here because Base64 images in URLs cause HTTP 431 (Header too large)
+                i: null 
+            }))
+        };
+        
+        const compressed = compressDeck(portableDeck);
+        const url = `${window.location.origin}/portable?deck=${compressed}`;
+        navigator.clipboard.writeText(url);
+        
+        if (hasCustomCards) {
+            addToast('Portable link copied! Note: Custom images are excluded from portable links to keep them short.', 'warning', 6000);
+        } else {
+            addToast('Portable link copied to clipboard!', 'success');
+        }
+    };
+
     if (loading) {
         return (
             <div className="min-h-screen flex justify-center items-center">
@@ -415,6 +442,13 @@ export default function ProjectEditorPage() {
                         className="bg-green-700 hover:bg-blue-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
                     >
                         + Add Custom Card
+                    </button>
+                    <button
+                        onClick={handleShare}
+                        className="bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
+                        disabled={!project || project.cards.length === 0}
+                    >
+                        🔗 Share Portable Link
                     </button>
 
                     {/* View Toggle */}
