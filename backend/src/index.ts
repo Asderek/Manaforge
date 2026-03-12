@@ -6,10 +6,11 @@ export interface Env {
 	DB: D1Database;
 	RECAPTCHA_SECRET_KEY: string;
 	RESEND_API_KEY: string;
+	FRONTEND_URL: string;
 }
 
 const { preflight, corsify } = cors({
-	origin: ['http://localhost:3000', 'https://manaforge.example', 'https://lucas.github.io'],
+	origin: ['http://localhost:3000', 'https://manaforge-two.vercel.app'],
 	allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
 	credentials: true,
 });
@@ -246,7 +247,8 @@ router.post('/api/admin/registration-requests/:id/approve', async (request, env:
 		).bind(tokenId, newUserId, hashedTokenStr).run();
 
 		// 5. Send activation email containing the secret link
-		const activationLink = `http://localhost:3000/activate?token=${rawTokenStr}`; // TODO: env variable for frontend URL
+		const frontendUrl = env.FRONTEND_URL || 'http://localhost:3000';
+		const activationLink = `${frontendUrl}/activate?token=${rawTokenStr}`;
 
 		await sendEmailAndUpdateLog(
 			env,
@@ -363,7 +365,8 @@ router.post('/api/auth/forgot-password', async (request, env: Env) => {
 			).bind(tokenId, user.id, hashedTokenStr).run();
 
 			// 4. Send Email
-			const resetLink = `http://localhost:3000/reset-password?token=${rawTokenStr}`;
+			const frontendUrl = env.FRONTEND_URL || 'http://localhost:3000';
+			const resetLink = `${frontendUrl}/reset-password?token=${rawTokenStr}`;
 
 			await sendEmailAndUpdateLog(
 				env,
