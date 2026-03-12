@@ -44,6 +44,7 @@ export default function ProjectEditorPage() {
     const [importProgress, setImportProgress] = useState('');
     const [showProxySheet, setShowProxySheet] = useState(false);
     const [showCustomCardModal, setShowCustomCardModal] = useState(false);
+    const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
 
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
@@ -415,6 +416,22 @@ export default function ProjectEditorPage() {
                     >
                         + Add Custom Card
                     </button>
+
+                    {/* View Toggle */}
+                    <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md ml-auto">
+                        <button
+                            onClick={() => setViewMode('table')}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'table' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Table
+                        </button>
+                        <button
+                            onClick={() => setViewMode('grid')}
+                            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                        >
+                            Grid
+                        </button>
+                    </div>
                 </div>
 
                 {/* Import Modal */}
@@ -445,36 +462,45 @@ export default function ProjectEditorPage() {
                         </button>
                     </div>
                 ) : (
-                    <div className="bg-blue-50/60 rounded-lg shadow-sm border border-blue-100 overflow-hidden">
-                        <table className="min-w-full divide-y divide-gray-200">
-                            <thead className="bg-blue-100/50">
-                                <tr>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">#</th>
-                                    <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-10">👁</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Qty</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Card Name</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Order</th>
-                                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {project.cards.map((card, idx) => (
-                                    <CardRow
-                                        key={card.id}
-                                        card={card}
-                                        index={idx}
-                                        isFirst={idx === 0}
-                                        isLast={idx === project.cards.length - 1}
-                                        onUpdate={handleUpdateCard}
-                                        onDelete={handleDeleteCard}
-                                        onMove={handleMoveCard}
-                                        animateY={animatingCards[card.id] ?? 0}
-                                        rowRef={(el) => { rowRefs.current[card.id] = el; }}
-                                        scryfallCache={scryfallCache}
-                                    />
-                                ))}
-                            </tbody>
-                        </table>
+                    <div className="bg-blue-50/60 rounded-lg shadow-sm border border-blue-100 overflow-hidden min-h-[400px]">
+                        {viewMode === 'table' ? (
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-blue-100/50">
+                                    <tr>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">#</th>
+                                        <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-10">👁</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Qty</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Card Name</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Order</th>
+                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-100">
+                                    {project.cards.map((card, idx) => (
+                                        <CardRow
+                                            key={card.id}
+                                            card={card}
+                                            index={idx}
+                                            isFirst={idx === 0}
+                                            isLast={idx === project.cards.length - 1}
+                                            onUpdate={handleUpdateCard}
+                                            onDelete={handleDeleteCard}
+                                            onMove={handleMoveCard}
+                                            animateY={animatingCards[card.id] || 0}
+                                            rowRef={(el) => (rowRefs.current[card.id] = el)}
+                                            scryfallCache={scryfallCache}
+                                        />
+                                    ))}
+                                </tbody>
+                            </table>
+                        ) : (
+                            <GridView
+                                cards={project.cards}
+                                onUpdate={handleUpdateCard}
+                                onDelete={handleDeleteCard}
+                                scryfallCache={scryfallCache}
+                            />
+                        )}
                     </div>
                 )}
             </div>
@@ -496,6 +522,119 @@ export default function ProjectEditorPage() {
                 />
             )}
         </main>
+    );
+}
+
+// ── Grid View Components ──
+function GridView({ cards, onUpdate, onDelete, scryfallCache }: {
+    cards: Card[];
+    onUpdate: (card: Card, updates: Partial<Card>) => void;
+    onDelete: (id: string) => void;
+    scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+}) {
+    return (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-6">
+            {cards.map(card => (
+                <GridCard
+                    key={card.id}
+                    card={card}
+                    onUpdate={onUpdate}
+                    onDelete={onDelete}
+                    scryfallCache={scryfallCache}
+                />
+            ))}
+        </div>
+    );
+}
+
+function GridCard({ card, onUpdate, onDelete, scryfallCache }: {
+    card: Card;
+    onUpdate: (card: Card, updates: Partial<Card>) => void;
+    onDelete: (id: string) => void;
+    scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+}) {
+    const [img, setImg] = useState<string | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        if (card.custom_image) {
+            setImg(card.custom_image);
+            return;
+        }
+        const fetchImg = async () => {
+            const name = card.card_name;
+            if (scryfallCache.current[name] !== undefined) {
+                setImg(scryfallCache.current[name]);
+                return;
+            }
+            setLoading(true);
+            try {
+                const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    const url = data.image_uris?.normal || data.image_uris?.small || null;
+                    scryfallCache.current[name] = url;
+                    setImg(url);
+                } else {
+                    scryfallCache.current[name] = null;
+                }
+            } catch {
+                scryfallCache.current[name] = null;
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchImg();
+    }, [card.card_name, card.custom_image, scryfallCache]);
+
+    return (
+        <div className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md hover:border-blue-300">
+            {/* Image Container */}
+            <div className="aspect-[63/88] bg-gray-50 relative overflow-hidden flex items-center justify-center">
+                {loading ? (
+                    <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                ) : (
+                    <img
+                        src={img || "/placeholder.png"}
+                        alt={card.card_name}
+                        className={`w-full h-full object-cover select-none ${!img ? 'opacity-40 grayscale' : ''}`}
+                    />
+                )}
+
+                {/* Overlay Controls */}
+                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">
+                    <button
+                        onClick={() => onDelete(card.id)}
+                        className="self-end bg-red-600/90 hover:bg-red-600 text-white w-6 h-6 flex items-center justify-center rounded transition-colors text-xs"
+                        title="Delete card"
+                    >
+                        🗑
+                    </button>
+
+                    <div className="flex items-center justify-center gap-3 bg-white/10 backdrop-blur-md rounded-full py-1.5 px-3 mx-auto mb-2 border border-white/20">
+                        <button
+                            onClick={() => onUpdate(card, { quantity: Math.max(1, card.quantity - 1) })}
+                            className="text-white hover:text-blue-400 font-bold w-4 text-center select-none"
+                        >
+                            -
+                        </button>
+                        <span className="text-white font-bold text-sm min-w-[20px] text-center">{card.quantity}</span>
+                        <button
+                            onClick={() => onUpdate(card, { quantity: card.quantity + 1 })}
+                            className="text-white hover:text-blue-400 font-bold w-4 text-center select-none"
+                        >
+                            +
+                        </button>
+                    </div>
+                </div>
+            </div>
+            {/* Info */}
+            <div className="p-1 px-2 text-center bg-gray-50/50 border-t border-gray-100">
+                <p className="text-[9px] font-bold text-gray-700 truncate" title={card.card_name}>
+                    {card.quantity}x {card.card_name}
+                </p>
+            </div>
+        </div>
     );
 }
 
