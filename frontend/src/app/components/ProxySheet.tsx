@@ -7,6 +7,7 @@ type Card = {
     card_name: string;
     quantity: number;
     sort_order: number;
+    custom_image?: string | null;
 };
 
 interface ProxySheetProps {
@@ -15,7 +16,9 @@ interface ProxySheetProps {
     onClose: () => void;
 }
 
-const BASIC_LANDS = ['plains', 'island', 'swamp', 'mountain', 'forest', 'snow-covered plains', 'snow-covered island', 'snow-covered swamp', 'snow-covered mountain', 'snow-covered forest', 'wastes'];
+const BASIC_LANDS = ['plains', 'island', 'swamp', 'mountain', 'forest',
+    'snow-covered plains', 'snow-covered island', 'snow-covered swamp', 'snow-covered mountain', 'snow-covered forest',
+    'wastes'];
 
 const PAPER_SIZES: Record<string, { label: string; width: string; height: string }> = {
     letter: { label: 'Letter (8.5×11 in)', width: '215.9mm', height: '279.4mm' },
@@ -50,7 +53,10 @@ export default function ProxySheet({ cards, scryfallCache, onClose }: ProxySheet
     const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
 
     const filteredCards = skipBasicLands
-        ? cards.filter(c => !BASIC_LANDS.includes(c.card_name.toLowerCase().trim()))
+        ? cards.filter(c => {
+            console.log("FOUND THE BROKEN CARD:", c);
+            return !BASIC_LANDS.includes(c.card_name?.toLowerCase().trim() || "");
+        })
         : cards;
 
     // Expand cards by quantity
@@ -94,6 +100,10 @@ export default function ProxySheet({ cards, scryfallCache, onClose }: ProxySheet
             const urls: Record<string, string> = {};
 
             for (const card of relevantCards) {
+                if (card.custom_image) {
+                    urls[card.card_name] = card.custom_image;
+                    continue;
+                }
                 if (scryfallCache[card.card_name] !== undefined) {
                     urls[card.card_name] = scryfallCache[card.card_name] || '/placeholder.png';
                     continue;
@@ -136,7 +146,7 @@ export default function ProxySheet({ cards, scryfallCache, onClose }: ProxySheet
         );
     }
 
-    const cropMarkSize = 6; // mm
+    const cropMarkSize = 10; // mm
     const cropMarkColor = '#333';
 
     return (
@@ -230,17 +240,17 @@ export default function ProxySheet({ cards, scryfallCache, onClose }: ProxySheet
                                 {showCropMarks && (
                                     <>
                                         {/* Top-left */}
-                                        <div style={{ position:'absolute', top:`-${cropMarkSize}px`, left:0, width:'1px', height:`${cropMarkSize}px`, background: cropMarkColor }} />
-                                        <div style={{ position:'absolute', top:0, left:`-${cropMarkSize}px`, width:`${cropMarkSize}px`, height:'1px', background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', top: `-${cropMarkSize}px`, left: 0, width: '1px', height: `${cropMarkSize}px`, background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', top: 0, left: `-${cropMarkSize}px`, width: `${cropMarkSize}px`, height: '1px', background: cropMarkColor }} />
                                         {/* Top-right */}
-                                        <div style={{ position:'absolute', top:`-${cropMarkSize}px`, right:0, width:'1px', height:`${cropMarkSize}px`, background: cropMarkColor }} />
-                                        <div style={{ position:'absolute', top:0, right:`-${cropMarkSize}px`, width:`${cropMarkSize}px`, height:'1px', background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', top: `-${cropMarkSize}px`, right: 0, width: '1px', height: `${cropMarkSize}px`, background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', top: 0, right: `-${cropMarkSize}px`, width: `${cropMarkSize}px`, height: '1px', background: cropMarkColor }} />
                                         {/* Bottom-left */}
-                                        <div style={{ position:'absolute', bottom:`-${cropMarkSize}px`, left:0, width:'1px', height:`${cropMarkSize}px`, background: cropMarkColor }} />
-                                        <div style={{ position:'absolute', bottom:0, left:`-${cropMarkSize}px`, width:`${cropMarkSize}px`, height:'1px', background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', bottom: `-${cropMarkSize}px`, left: 0, width: '1px', height: `${cropMarkSize}px`, background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', bottom: 0, left: `-${cropMarkSize}px`, width: `${cropMarkSize}px`, height: '1px', background: cropMarkColor }} />
                                         {/* Bottom-right */}
-                                        <div style={{ position:'absolute', bottom:`-${cropMarkSize}px`, right:0, width:'1px', height:`${cropMarkSize}px`, background: cropMarkColor }} />
-                                        <div style={{ position:'absolute', bottom:0, right:`-${cropMarkSize}px`, width:`${cropMarkSize}px`, height:'1px', background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', bottom: `-${cropMarkSize}px`, right: 0, width: '1px', height: `${cropMarkSize}px`, background: cropMarkColor }} />
+                                        <div style={{ position: 'absolute', bottom: 0, right: `-${cropMarkSize}px`, width: `${cropMarkSize}px`, height: '1px', background: cropMarkColor }} />
                                     </>
                                 )}
 

@@ -427,6 +427,28 @@ router.post('/api/auth/reset-password', async (request, env: Env) => {
 	}
 });
 
+// Custom Cards: Gallery
+router.post('/api/custom-cards', async (request, env: Env) => {
+	try {
+		const user = await requireAuth(request, env);
+		if (!user) return error(401, 'Not authenticated');
+
+		const { card_name, card_image } = await request.json() as any;
+		if (!card_name || !card_image) return error(400, 'Missing card name or image');
+
+		const id = crypto.randomUUID();
+		await env.DB.prepare(
+			`INSERT INTO custom_cards (id, user_id, card_name, card_image)
+			 VALUES (?, ?, ?, ?)`
+		).bind(id, user.user_id, card_name, card_image).run();
+
+		return json({ success: true, card: { id, card_name } });
+	} catch (e) {
+		console.error("Create custom card error:", e);
+		return error(500, 'Internal Server Error');
+	}
+});
+
 // ──────────────────────────────────────────────
 // Projects CRUD
 // ──────────────────────────────────────────────
@@ -494,8 +516,12 @@ router.get('/api/projects/:id', async (request, env: Env) => {
 		if (!project) return error(404, 'Project not found');
 
 		const { results: cards } = await env.DB.prepare(
-			`SELECT * FROM project_cards WHERE project_id = ? ORDER BY sort_order ASC, created_at ASC`
-		).bind(projectId).all();
+			`SELECT pc.*, cc.card_image as custom_image
+			 FROM project_cards pc
+			 LEFT JOIN custom_cards cc ON pc.card_name = cc.card_name AND cc.user_id = ?
+			 WHERE pc.project_id = ?
+			 ORDER BY pc.sort_order ASC, pc.created_at ASC`
+		).bind(user.user_id, projectId).all();
 
 		return json({ success: true, project: { ...project, cards } });
 	} catch (e) {

@@ -5,12 +5,15 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useToast } from '../../components/Toast';
 import ProxySheet from '../../components/ProxySheet';
+import CustomCardModal from '@/app/components/CustomCardModal';
+import ImportDeckModal from '@/app/components/ImportDeckModal';
 
 type Card = {
     id: string;
     card_name: string;
     quantity: number;
     sort_order: number;
+    custom_image?: string | null;
 };
 
 type Project = {
@@ -40,6 +43,7 @@ export default function ProjectEditorPage() {
     const [importError, setImportError] = useState('');
     const [importProgress, setImportProgress] = useState('');
     const [showProxySheet, setShowProxySheet] = useState(false);
+    const [showCustomCardModal, setShowCustomCardModal] = useState(false);
 
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
@@ -273,6 +277,60 @@ export default function ProjectEditorPage() {
         ]);
     };
 
+    const imageToBase64 = (url: string): Promise<string> => {
+        return new Promise(async (resolve, reject) => {
+            try {
+                const response = await fetch(url);
+                const blob = await response.blob();
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            } catch (err) {
+                reject(err);
+            }
+        });
+    };
+
+    const handleCreateCustomCard = async (name: string, url: string) => {
+        setSaving(true);
+        addToast('Processing custom card...', 'info');
+        try {
+            // 1. Convert to base64
+            const base64 = await imageToBase64(url);
+
+            // 2. Add to custom card table
+            const resCustom = await fetch(`${apiUrl}/api/custom-cards`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ card_name: name, card_image: base64 })
+            });
+            const dataCustom = await resCustom.json();
+            if (!dataCustom.success) throw new Error(dataCustom.error || 'Failed to save to gallery');
+
+            // 3. Add to current project decklist
+            const resProject = await fetch(`${apiUrl}/api/projects/${projectId}/cards`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ cards: [{ card_name: name, quantity: 1 }] })
+            });
+            const dataProject = await resProject.json();
+            if (!dataProject.success) throw new Error(dataProject.error || 'Failed to add to project');
+
+            // 4. Success cleanup
+            setShowCustomCardModal(false);
+            fetchProject();
+            addToast(`Custom card "${name}" created and added to project!`, 'success');
+        } catch (err: any) {
+            console.error('Custom card error:', err);
+            addToast(err.message || 'Error creating custom card. (Pro-tip: Some sites block direct image access, try a different host)', 'error', 8000);
+        } finally {
+            setSaving(false);
+        }
+    };
+
     const totalCards = project?.cards.reduce((sum, c) => sum + c.quantity, 0) ?? 0;
 
     if (loading) {
@@ -351,51 +409,27 @@ export default function ProjectEditorPage() {
                             🖨 Preview Sheet
                         </button>
                     )}
+                    <button
+                        onClick={() => setShowCustomCardModal(true)}
+                        className="bg-green-700 hover:bg-blue-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
+                    >
+                        + Add Custom Card
+                    </button>
                 </div>
 
                 {/* Import Modal */}
                 {showImport && (
-                    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
-                        <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
-                            <h2 className="text-lg font-bold text-gray-900 mb-2">Import Decklist</h2>
-                            <p className="text-sm text-gray-600 mb-4">
-                                Paste your decklist below. Supports formats like <code className="bg-gray-100 px-1 rounded">4 Lightning Bolt</code> or <code className="bg-gray-100 px-1 rounded">4x Lightning Bolt</code>.
-                                Lines starting with <code className="bg-gray-100 px-1 rounded">//</code> or <code className="bg-gray-100 px-1 rounded">#</code> are ignored.
-                            </p>
-                            <textarea
-                                value={importText}
-                                onChange={(e) => setImportText(e.target.value)}
-                                placeholder={`4 Lightning Bolt\n4 Monastery Swiftspear\n2 Eidolon of the Great Revel\n20 Mountain`}
-                                className="w-full h-48 px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 outline-none font-mono text-sm resize-none"
-                            />
-                            {importError && (
-                                <div className="mt-2 p-2 bg-red-50 border-l-4 border-red-500 text-red-700 text-sm rounded">
-                                    {importError}
-                                </div>
-                            )}
-                            {importProgress && (
-                                <div className="mt-2 p-2 bg-blue-50 border-l-4 border-blue-400 text-blue-700 text-sm rounded flex items-center gap-2">
-                                    <span className="animate-spin text-xs">⏳</span> {importProgress}
-                                </div>
-                            )}
-                            <div className="flex justify-end gap-3 mt-4">
-                                <button
-                                    onClick={() => { setShowImport(false); setImportText(''); setImportError(''); setImportProgress(''); }}
-                                    disabled={saving}
-                                    className="text-gray-600 hover:text-gray-800 font-medium text-sm px-4 py-2 disabled:opacity-50"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    onClick={handleImport}
-                                    disabled={saving || !importText.trim()}
-                                    className="bg-green-600 hover:bg-green-700 text-white font-medium rounded-md text-sm px-6 py-2 transition-colors disabled:opacity-50"
-                                >
-                                    {saving ? 'Validating & Importing...' : 'Import Cards'}
-                                </button>
-                            </div>
-                        </div>
-                    </div>
+                    <ImportDeckModal
+                        onClose={() => setShowImport(false)}
+                        onImport={handleImport}
+                        importText={importText}
+                        setImportText={setImportText}
+                        importError={importError}
+                        setImportError={setImportError}
+                        importProgress={importProgress}
+                        setImportProgress={setImportProgress}
+                        saving={saving}
+                    />
                 )}
 
                 {/* Card List */}
@@ -453,6 +487,14 @@ export default function ProjectEditorPage() {
                     onClose={() => setShowProxySheet(false)}
                 />
             )}
+
+            {/* Proxy Preview Sheet */}
+            {showCustomCardModal && (
+                <CustomCardModal
+                    onClose={() => setShowCustomCardModal(false)}
+                    onCreate={handleCreateCustomCard}
+                />
+            )}
         </main>
     );
 }
@@ -486,6 +528,10 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
 
     const handlePreviewEnter = async () => {
         setShowPreview(true);
+        if (card.custom_image) {
+            setPreviewImg(card.custom_image);
+            return;
+        }
         const name = card.card_name;
         // Check cache first
         if (scryfallCache.current[name] !== undefined) {
