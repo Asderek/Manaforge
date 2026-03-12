@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useToast } from '../../components/Toast';
+import ProxySheet from '../../components/ProxySheet';
 
 type Card = {
     id: string;
@@ -38,6 +39,7 @@ export default function ProjectEditorPage() {
     const [importText, setImportText] = useState('');
     const [importError, setImportError] = useState('');
     const [importProgress, setImportProgress] = useState('');
+    const [showProxySheet, setShowProxySheet] = useState(false);
 
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
@@ -337,10 +339,18 @@ export default function ProjectEditorPage() {
                 <div className="flex items-center gap-3 mb-6">
                     <button
                         onClick={() => setShowImport(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors"
+                        className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
                     >
                         📋 Import Decklist
                     </button>
+                    {project.cards.length > 0 && (
+                        <button
+                            onClick={() => setShowProxySheet(true)}
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
+                        >
+                            🖨 Preview Sheet
+                        </button>
+                    )}
                 </div>
 
                 {/* Import Modal */}
@@ -434,6 +444,15 @@ export default function ProjectEditorPage() {
                     </div>
                 )}
             </div>
+
+            {/* Proxy Preview Sheet */}
+            {showProxySheet && (
+                <ProxySheet
+                    cards={project.cards}
+                    scryfallCache={scryfallCache.current}
+                    onClose={() => setShowProxySheet(false)}
+                />
+            )}
         </main>
     );
 }
