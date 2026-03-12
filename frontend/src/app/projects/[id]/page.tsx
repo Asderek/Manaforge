@@ -631,7 +631,7 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache }: {
                     <img
                         src={img || "/placeholder.png"}
                         alt={card.card_name}
-                        className={`w-full h-full object-cover select-none ${!img ? 'opacity-40 grayscale' : ''}`}
+                        className="w-full h-full object-cover select-none"
                     />
                 )}
 
