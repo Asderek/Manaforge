@@ -430,6 +430,7 @@ router.post('/api/auth/reset-password', async (request, env: Env) => {
 // Custom Cards: Gallery
 router.post('/api/custom-cards', async (request, env: Env) => {
 	try {
+		console.log("Creating custom card...");
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
