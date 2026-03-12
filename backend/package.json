@@ -1,0 +1,26 @@
+{
+	"name": "backend",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"test": "vitest",
+		"cf-typegen": "wrangler types"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.12.4",
+		"@cloudflare/workers-types": "^4.20260310.1",
+		"@types/cookie": "^1.0.0",
+		"@types/node": "^25.4.0",
+		"typescript": "^5.5.2",
+		"vitest": "~3.2.0",
+		"wrangler": "^4.72.0"
+	},
+	"dependencies": {
+		"cookie": "^1.1.1",
+		"itty-router": "^5.0.23",
+		"resend": "^6.9.3"
+	}
+}
