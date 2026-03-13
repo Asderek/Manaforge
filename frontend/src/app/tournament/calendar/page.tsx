@@ -35,7 +35,7 @@ export default function CalendarPage() {
     const [mapCenter, setMapCenter] = useState(defaultCenter);
     const [autocomplete, setAutocomplete] = useState<google.maps.places.Autocomplete | null>(null);
     const { addToast } = useToast();
-    
+
     const [currentDate, setCurrentDate] = useState(new Date());
     const [selectedDay, setSelectedDay] = useState<number | null>(null);
     const [formData, setFormData] = useState({
@@ -50,7 +50,7 @@ export default function CalendarPage() {
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
     const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-    
+
     const { isLoaded } = useJsApiLoader({
         googleMapsApiKey: mapsKey,
         libraries
@@ -89,11 +89,11 @@ export default function CalendarPage() {
         const month = date.getMonth();
         const firstDay = new Date(year, month, 1).getDay();
         const lastDate = new Date(year, month + 1, 0).getDate();
-        
+
         const days = [];
         for (let i = 0; i < firstDay; i++) days.push(null);
         for (let i = 1; i <= lastDate; i++) days.push(i);
-        
+
         return days;
     };
 
@@ -106,12 +106,13 @@ export default function CalendarPage() {
         return events.filter(e => e.start_date.split('T')[0] === dateStr);
     };
 
-    const handleCreateClick = () => {
-        const baseDate = selectedDay 
-            ? new Date(currentDate.getFullYear(), currentDate.getMonth(), selectedDay, 8, 0)
+    const handleCreateClick = (dayOverride?: number | null) => {
+        const day = dayOverride !== undefined ? dayOverride : selectedDay;
+        const baseDate = day
+            ? new Date(currentDate.getFullYear(), currentDate.getMonth(), day, 8, 0)
             : new Date();
-        
-        if (!selectedDay) baseDate.setHours(8, 0, 0, 0);
+
+        if (!day) baseDate.setHours(8, 0, 0, 0);
 
         const endDate = new Date(baseDate.getTime() + 4 * 60 * 60 * 1000); // +4 hours
 
@@ -170,7 +171,7 @@ export default function CalendarPage() {
                         <h1 className="text-xl font-bold text-gray-900">Event Calendar</h1>
                     </div>
                     <button
-                        onClick={handleCreateClick}
+                        onClick={() => handleCreateClick()}
                         className="bg-green-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-700 transition-colors shadow-sm text-sm"
                     >
                         + Create Event
@@ -178,7 +179,16 @@ export default function CalendarPage() {
                 </div>
             </div>
 
-            <div className="max-w-6xl mx-auto p-8">
+            <div className="max-w-6xl mx-auto">
+                <div className="ms-8 mb-1 mt-8 flex items-center gap-6 text-sm text-gray-400">
+                    <div className="flex items-center gap-2">
+                        <span className="w-3 h-3 rounded-full bg-blue-100 border border-blue-200"></span>
+                        Standard Event
+                    </div>
+                    <div className="text-xs font-medium">
+                        💡 Tip: Double click on any day to schedule a new event.
+                    </div>
+                </div>
                 <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
                     <div className="p-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
                         <h2 className="text-xl font-black text-gray-900">{monthName} {currentDate.getFullYear()}</h2>
@@ -206,16 +216,22 @@ export default function CalendarPage() {
                     <div className="grid grid-cols-7 bg-gray-50/30">
                         {days.map((day, idx) => {
                             const dayEvents = day ? getEventsForDay(day) : [];
-                            const isToday = day && 
-                                day === new Date().getDate() && 
-                                currentDate.getMonth() === new Date().getMonth() && 
+                            const isToday = day &&
+                                day === new Date().getDate() &&
+                                currentDate.getMonth() === new Date().getMonth() &&
                                 currentDate.getFullYear() === new Date().getFullYear();
                             const isSelected = day === selectedDay;
 
                             return (
-                                <div 
-                                    key={idx} 
+                                <div
+                                    key={idx}
                                     onClick={() => day && setSelectedDay(day === selectedDay ? null : day)}
+                                    onDoubleClick={() => {
+                                        if (day) {
+                                            setSelectedDay(day);
+                                            handleCreateClick(day);
+                                        }
+                                    }}
                                     className={`min-h-[120px] p-2 border-r border-b border-gray-100 transition-all last:border-r-0 ${!day ? 'bg-gray-50/50' : 'cursor-pointer'} ${isSelected ? 'bg-blue-50/50 ring-2 ring-inset ring-blue-500/20' : 'bg-white hover:bg-gray-50/50'}`}
                                 >
                                     {day && (
@@ -225,7 +241,7 @@ export default function CalendarPage() {
                                             </div>
                                             <div className="space-y-1">
                                                 {dayEvents.map(event => (
-                                                    <Link 
+                                                    <Link
                                                         key={event.id}
                                                         href={`/tournament/events/${event.id}`}
                                                         onClick={(e) => e.stopPropagation()}
@@ -240,16 +256,6 @@ export default function CalendarPage() {
                                 </div>
                             );
                         })}
-                    </div>
-                </div>
-
-                <div className="mt-8 flex items-center gap-6 text-sm text-gray-400">
-                    <div className="flex items-center gap-2">
-                        <span className="w-3 h-3 rounded-full bg-blue-100 border border-blue-200"></span>
-                        Standard Event
-                    </div>
-                    <div className="text-xs font-medium">
-                        💡 Tip: Click on any day to schedule a new event.
                     </div>
                 </div>
             </div>
