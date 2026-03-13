@@ -779,24 +779,36 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                 {/* Time Slot Selector */}
                                 <div className="mb-8">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Select Time Slot</h4>
-                                    <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
-                                        {getTimeSlots().map(slot => (
-                                            <button
-                                                key={slot.start}
-                                                onClick={() => {
-                                                    setSelectedSlot(slot.start);
-                                                    setSelectedTable(null);
-                                                    setResultEditMatch(null);
-                                                }}
-                                                className={`px-6 py-3 rounded-xl font-bold text-sm whitespace-nowrap transition-all border-2 ${
-                                                    selectedSlot === slot.start 
-                                                    ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 scale-105' 
-                                                    : 'bg-white border-gray-100 text-gray-500 hover:border-blue-200 hover:text-blue-600'
-                                                }`}
-                                            >
-                                                {slot.label}
-                                            </button>
-                                        ))}
+                                    <div className="flex gap-2 overflow-x-auto pt-4 pb-2 scrollbar-none">
+                                        {getTimeSlots().map(slot => {
+                                            const tableCount = matches.filter(m => m.scheduled_at === slot.start && m.status !== MatchStatus.CANCELED).length;
+                                            return (
+                                                <button
+                                                    key={slot.start}
+                                                    onClick={() => {
+                                                        setSelectedSlot(slot.start);
+                                                        setSelectedTable(null);
+                                                        setResultEditMatch(null);
+                                                    }}
+                                                    className={`px-6 py-3 rounded-xl font-bold text-sm whitespace-nowrap transition-all border-2 relative ${
+                                                        selectedSlot === slot.start 
+                                                        ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 scale-105' 
+                                                        : 'bg-white border-gray-100 text-gray-500 hover:border-blue-200 hover:text-blue-600'
+                                                    }`}
+                                                >
+                                                    {slot.label}
+                                                    {tableCount > 0 && (
+                                                        <div className={`absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ring-2 ${
+                                                            selectedSlot === slot.start 
+                                                            ? 'bg-emerald-500 text-white border border-emerald-400 ring-white' 
+                                                            : 'bg-blue-600 text-white ring-white'
+                                                        }`}>
+                                                            {tableCount}
+                                                        </div>
+                                                    )}
+                                                </button>
+                                            );
+                                        })}
                                     </div>
                                 </div>
 
