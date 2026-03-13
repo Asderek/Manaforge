@@ -31,7 +31,7 @@ type Registration = {
     wins: number;
     losses: number;
     draws: number;
-    dropped: boolean;
+    status: 'active' | 'dropped' | 'eliminated';
 };
 
 type Match = {
@@ -70,6 +70,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
     const [scores, setScores] = useState({ p1: 0, p2: 0, draws: 0 });
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const [pendingForfeitId, setPendingForfeitId] = useState<string | null>(null);
+    const [pendingEliminateId, setPendingEliminateId] = useState<string | null>(null);
     const [pendingSaveResultId, setPendingSaveResultId] = useState<string | null>(null);
     const [pendingGenerateRound, setPendingGenerateRound] = useState(false);
     
@@ -159,29 +160,37 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         }
     };
 
-    const handleForfeit = async (regId: string) => {
-        if (pendingForfeitId !== regId) {
-            setPendingForfeitId(regId);
-            addToast('Click again to confirm forfeit', 'warning');
-            setTimeout(() => setPendingForfeitId(null), 3000);
+    const handleUpdateStatus = async (regId: string, newStatus: 'dropped' | 'eliminated') => {
+        const isForfeit = newStatus === 'dropped';
+        const pendingId = isForfeit ? pendingForfeitId : pendingEliminateId;
+        const setPendingId = isForfeit ? setPendingForfeitId : setPendingEliminateId;
+
+        if (pendingId !== regId) {
+            setPendingId(regId);
+            addToast(`Click again to confirm ${newStatus}`, 'warning');
+            setTimeout(() => setPendingId(null), 3000);
             return;
         }
+
         try {
             const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/registrations/${regId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ dropped: true }),
+                body: JSON.stringify({ status: newStatus }),
                 credentials: 'include'
             });
             const data = await res.json();
             if (data.success) {
-                addToast('Player forfeited', 'success');
-                setPendingForfeitId(null);
+                addToast(`Player ${newStatus}`, 'success');
+                setPendingId(null);
                 loadData();
+            } else {
+                addToast(data.message || `Error updating player status`, 'error');
+                setPendingId(null);
             }
         } catch (err) {
-            addToast('Error forfeiting player', 'error');
-            setPendingForfeitId(null);
+            addToast('Error updating player status', 'error');
+            setPendingId(null);
         }
     };
 
@@ -280,9 +289,10 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         const match = matches.find(m => m.id === matchId);
         if (!match || !tournament) return;
 
-        // Constraint: Only Allow dragging if match.status === MatchStatus.AWAITING_MATCH
-        if (match.status !== MatchStatus.AWAITING_MATCH) {
-            addToast('Only matches awaiting start can be rescheduled', 'warning');
+        // Constraint: Only Allow dragging if match.status is AWAITING_MATCH or TABLE_PENDING
+        const allowedStatuses = [MatchStatus.AWAITING_MATCH, MatchStatus.TABLE_PENDING];
+        if (!allowedStatuses.includes(match.status)) {
+            addToast('This match cannot be rescheduled', 'warning');
             return;
         }
 
@@ -290,7 +300,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         const matchesInTargetSlot = matches.filter(m => m.scheduled_at === newSlot && m.status !== MatchStatus.CANCELED);
         
         let targetTable: number | null = match.table_number;
-        const isOriginalTableTaken = matchesInTargetSlot.some(m => m.table_number === targetTable);
+        const isOriginalTableTaken = !targetTable || matchesInTargetSlot.some(m => m.table_number === targetTable);
 
         if (isOriginalTableTaken) {
             // Find next available table
@@ -309,21 +319,23 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         }
 
         try {
+            const isInitialAssignment = match.status === MatchStatus.TABLE_PENDING;
             const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/matches/${matchId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     table_number: targetTable,
-                    scheduled_at: newSlot
+                    scheduled_at: newSlot,
+                    status: isInitialAssignment ? MatchStatus.AWAITING_MATCH : match.status
                 }),
                 credentials: 'include'
             });
             if (res.ok) {
-                addToast(`Match rescheduled to Table ${targetTable}`, 'success');
+                addToast(isInitialAssignment ? `Match assigned to Table ${targetTable}` : `Match rescheduled to Table ${targetTable}`, 'success');
                 loadData();
             }
         } catch (err) {
-            addToast('Failed to reschedule match', 'error');
+            addToast('Failed to update match schedule', 'error');
         }
     };
 
@@ -567,43 +579,65 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
-                                {registrations.map((reg, idx) => (
-                                    <tr key={reg.id} className={`${reg.dropped ? 'opacity-50 grayscale' : ''} hover:bg-gray-50/50 transition-colors`}>
-                                        <td className="px-6 py-4 font-mono text-gray-400">{idx + 1}</td>
-                                        <td className="px-6 py-4">
-                                            <div className={`font-bold ${reg.dropped ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{reg.player_name}</div>
-                                            {reg.dropped && <span className="text-[10px] text-red-500 font-bold uppercase">Dropped</span>}
-                                        </td>
-                                        <td className="px-6 py-4 text-center text-gray-600 font-medium">
-                                            {reg.wins*3 + reg.draws} pts
-                                        </td>
-                                        <td className="px-6 py-4 text-center text-gray-400">
-                                            {reg.wins} / {reg.losses} / {reg.draws}
-                                        </td>
-                                        <td className="px-6 py-4 text-center font-black text-blue-600">
-                                            {reg.points}
-                                        </td>
-                                         <td className="px-6 py-4 text-right">
-                                            {tournament?.status === 'draft' ? (
-                                                <button 
-                                                    onClick={() => handleRemoveRegistration(reg.id)}
-                                                    className={`${pendingDeleteId === reg.id ? 'text-red-600 scale-110' : 'text-red-400'} hover:text-red-600 text-xs font-bold transition-all`}
-                                                >
-                                                    {pendingDeleteId === reg.id ? 'Confirm?' : 'Un-register'}
-                                                </button>
-                                            ) : (
-                                                !reg.dropped && (
-                                                    <button 
-                                                        onClick={() => handleForfeit(reg.id)}
-                                                        className={`${pendingForfeitId === reg.id ? 'text-red-600 scale-110' : 'text-orange-500'} hover:text-orange-600 text-xs font-bold transition-all bg-orange-50 px-2 py-1 rounded border border-orange-100`}
-                                                    >
-                                                        {pendingForfeitId === reg.id ? 'Confirm?' : 'Forfeit'}
-                                                    </button>
-                                                )
-                                            )}
-                                        </td>
-                                    </tr>
-                                ))}
+                                 {registrations.map((reg, idx) => {
+                                    const hasActiveMatches = matches.some(m => 
+                                        (m.p1_id === reg.player_id || m.p2_id === reg.player_id) && 
+                                        (m.status === MatchStatus.TABLE_PENDING || m.status === MatchStatus.AWAITING_MATCH || m.status === MatchStatus.ON_GOING)
+                                    );
+                                    const isInactive = reg.status === 'dropped' || reg.status === 'eliminated';
+
+                                    return (
+                                        <tr key={reg.id} className={`${isInactive ? 'opacity-50 grayscale' : ''} hover:bg-gray-50/50 transition-colors`}>
+                                            <td className="px-6 py-4 font-mono text-gray-400">{idx + 1}</td>
+                                            <td className="px-6 py-4">
+                                                <div className={`font-bold ${isInactive ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{reg.player_name}</div>
+                                                {reg.status === 'dropped' && <span className="text-[10px] text-red-500 font-bold uppercase">Dropped</span>}
+                                                {reg.status === 'eliminated' && <span className="text-[10px] text-red-600 font-black uppercase tracking-widest bg-red-50 px-1 rounded">Eliminated</span>}
+                                            </td>
+                                            <td className="px-6 py-4 text-center text-gray-600 font-medium">
+                                                {reg.wins*3 + reg.draws} pts
+                                            </td>
+                                            <td className="px-6 py-4 text-center text-gray-400">
+                                                {reg.wins} / {reg.losses} / {reg.draws}
+                                            </td>
+                                            <td className="px-6 py-4 text-center font-black text-blue-600">
+                                                {reg.points}
+                                            </td>
+                                            <td className="px-6 py-4 text-right">
+                                                <div className="flex items-center justify-end gap-2">
+                                                    {tournament?.status === 'draft' ? (
+                                                        <button 
+                                                            onClick={() => handleRemoveRegistration(reg.id)}
+                                                            className={`${pendingDeleteId === reg.id ? 'text-red-600 scale-110' : 'text-red-400'} hover:text-red-600 text-xs font-bold transition-all`}
+                                                        >
+                                                            {pendingDeleteId === reg.id ? 'Confirm?' : 'Un-register'}
+                                                        </button>
+                                                    ) : (
+                                                        !isInactive && (
+                                                            <>
+                                                                <button 
+                                                                    onClick={() => handleUpdateStatus(reg.id, 'dropped')}
+                                                                    className={`${pendingForfeitId === reg.id ? 'text-red-600 scale-110' : 'text-orange-500'} hover:text-orange-600 text-xs font-bold transition-all bg-orange-50 px-2 py-1 rounded border border-orange-100 shadow-sm`}
+                                                                    title="Player chooses to leave the tournament"
+                                                                >
+                                                                    {pendingForfeitId === reg.id ? 'Confirm?' : 'Forfeit'}
+                                                                </button>
+                                                                <button 
+                                                                    onClick={() => handleUpdateStatus(reg.id, 'eliminated')}
+                                                                    disabled={hasActiveMatches}
+                                                                    className={`${pendingEliminateId === reg.id ? 'text-red-600 scale-110' : hasActiveMatches ? 'text-gray-300 bg-gray-50 border-gray-100 cursor-not-allowed' : 'text-red-500 bg-red-50 border-red-100 hover:bg-red-100'} text-xs font-bold transition-all px-2 py-1 rounded border shadow-sm`}
+                                                                    title={hasActiveMatches ? "Cannot eliminate while player has active matches" : "Eliminate player from future rounds"}
+                                                                >
+                                                                    {pendingEliminateId === reg.id ? 'Confirm?' : 'Eliminate'}
+                                                                </button>
+                                                            </>
+                                                        )
+                                                    )}
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                                 {registrations.length === 0 && (
                                     <tr>
                                         <td colSpan={5} className="px-6 py-12 text-center text-gray-400 italic">
@@ -652,44 +686,60 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                 </button>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 gap-4">
-                                {matches.map(match => (
-                                    <div key={match.id} className="bg-white border border-gray-200 p-4 rounded-xl flex items-center justify-between shadow-sm">
-                                        <div className="flex items-center gap-6">
-                                            <div className="w-10 h-10 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-center text-xs font-bold text-gray-400">
-                                                T{match.table_number || '?'}
+                            <div className="space-y-8">
+                                {[
+                                    { title: 'Ongoing matches', data: matches.filter(m => m.status !== MatchStatus.COMPLETE) },
+                                    { title: '---- past matches ----', data: matches.filter(m => m.status === MatchStatus.COMPLETE) }
+                                ].map((group, gIdx) => group.data.length > 0 && (
+                                    <div key={group.title} className="space-y-4">
+                                        {gIdx > 0 && (
+                                            <div className="flex items-center gap-4 py-4">
+                                                <div className="h-px bg-gray-200 flex-1"></div>
+                                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em]">{group.title}</span>
+                                                <div className="h-px bg-gray-200 flex-1"></div>
                                             </div>
-                                            <div className="flex items-center gap-4">
-                                                <div className="text-right">
-                                                    <p className="font-bold text-gray-900">{match.p1_name}</p>
+                                        )}
+                                        <div className="grid grid-cols-1 gap-4">
+                                            {group.data.map(match => (
+                                                <div key={match.id} className="bg-white border border-gray-200 p-4 rounded-xl flex items-center justify-between shadow-sm">
+                                                    <div className="flex items-center gap-6">
+                                                        <div className="w-10 h-10 bg-gray-50 border border-gray-100 rounded-lg flex items-center justify-center text-xs font-bold text-gray-400">
+                                                            T{match.table_number || '?'}
+                                                        </div>
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="text-right">
+                                                                <p className="font-bold text-gray-900">{match.p1_name}</p>
+                                                            </div>
+                                                            <div className="bg-gray-100 px-3 py-1 rounded-full text-xs font-black text-gray-500">
+                                                                {match.p1_score} - {match.p2_score}
+                                                            </div>
+                                                            <div>
+                                                                <p className="font-bold text-gray-900">{match.p2_name}</p>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex items-center gap-4">
+                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                                            match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' : 
+                                                            match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700 animate-pulse' :
+                                                            match.status === MatchStatus.AWAITING_MATCH ? 'bg-orange-100 text-orange-700' :
+                                                            match.status === MatchStatus.CANCELED ? 'bg-red-100 text-red-700' :
+                                                            'bg-gray-100 text-gray-500'
+                                                        }`}>
+                                                            {match.status.replace('_', ' ')}
+                                                        </span>
+                                                        {match.status === MatchStatus.AWAITING_MATCH && (
+                                                            <button 
+                                                                onClick={() => handleStartMatch(match.id)}
+                                                                className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-green-700 transition-colors"
+                                                            >
+                                                                Start Match
+                                                            </button>
+                                                        )}
+                                                        <button className="text-blue-600 font-bold text-sm hover:underline">Edit</button>
+                                                    </div>
                                                 </div>
-                                                <div className="bg-gray-100 px-3 py-1 rounded-full text-xs font-black text-gray-500">
-                                                    {match.p1_score} - {match.p2_score}
-                                                </div>
-                                                <div>
-                                                    <p className="font-bold text-gray-900">{match.p2_name}</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                        <div className="flex items-center gap-4">
-                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                                match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' : 
-                                                match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700 animate-pulse' :
-                                                match.status === MatchStatus.AWAITING_MATCH ? 'bg-orange-100 text-orange-700' :
-                                                match.status === MatchStatus.CANCELED ? 'bg-red-100 text-red-700' :
-                                                'bg-gray-100 text-gray-500'
-                                            }`}>
-                                                {match.status.replace('_', ' ')}
-                                            </span>
-                                            {match.status === MatchStatus.AWAITING_MATCH && (
-                                                <button 
-                                                    onClick={() => handleStartMatch(match.id)}
-                                                    className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-green-700 transition-colors"
-                                                >
-                                                    Start Match
-                                                </button>
-                                            )}
-                                            <button className="text-blue-600 font-bold text-sm hover:underline">Edit</button>
+                                            ))}
                                         </div>
                                     </div>
                                 ))}
@@ -1091,8 +1141,8 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                                     >
                                         <option value="">Select a player...</option>
-                                        {registrations.filter(r => r.id !== p2ManualMatch && !r.dropped).map(reg => (
-                                            <option key={reg.id} value={reg.id}>{reg.player_name}</option>
+                                        {registrations.filter(r => r.player_id !== p2ManualMatch && r.status === 'active').map(reg => (
+                                            <option key={reg.id} value={reg.player_id}>{reg.player_name}</option>
                                         ))}
                                     </select>
                                 </div>
@@ -1111,9 +1161,10 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
                                     >
                                         <option value="">Select a player...</option>
-                                        {registrations.filter(r => r.id !== p1ManualMatch && !r.dropped).map(reg => (
-                                            <option key={reg.id} value={reg.id}>{reg.player_name}</option>
+                                        {registrations.filter(r => r.player_id !== p1ManualMatch && r.status === 'active').map(reg => (
+                                            <option key={reg.id} value={reg.player_id}>{reg.player_name}</option>
                                         ))}
+                                        <option value="tobias-boon">Tobias Boon (Bye)</option>
                                     </select>
                                 </div>
                             </div>
@@ -1147,9 +1198,13 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                             </button>
                         </div>
 
-                        <div className="flex-1 overflow-auto p-8 bg-gray-50/30">
-                            <div className="space-y-12">
-                                {getTimelineData().map(day => (
+                        <div className="flex-1 flex overflow-hidden">
+                            <div className="flex-1 overflow-auto p-8 bg-gray-50/30">
+                                {(() => {
+                                    const pendingMatches = matches.filter(m => m.status === MatchStatus.TABLE_PENDING);
+                                    return (
+                                        <div className="space-y-12">
+                                            {getTimelineData().map(day => (
                                     <div key={day.date} className="relative">
                                         <h4 className="flex items-center gap-4 mb-6">
                                             <span className="text-lg font-black text-gray-900">{day.formattedDate}</span>
@@ -1253,13 +1308,70 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         </div>
                                     </div>
                                 ))}
-                                {getTimelineData().length === 0 && (
-                                    <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-gray-100">
-                                         <span className="text-4xl mb-4 block">📅</span>
-                                         <p className="text-gray-400 italic">No time slots scheduled yet.</p>
-                                    </div>
-                                )}
+                                            {getTimelineData().length === 0 && (
+                                                <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-gray-100">
+                                                     <span className="text-4xl mb-4 block">📅</span>
+                                                     <p className="text-gray-400 italic">No time slots scheduled yet.</p>
+                                                </div>
+                                            )}
+                                        </div>
+                                    );
+                                })()}
                             </div>
+
+                            {/* Sidebar for Pending Matches */}
+                            {matches.filter(m => m.status === MatchStatus.TABLE_PENDING).length > 0 && (
+                                <div className="w-80 border-l border-gray-100 bg-white overflow-y-auto p-6 shadow-[inset_10px_0_15px_-10px_rgba(0,0,0,0.05)]">
+                                    <div className="sticky top-0 bg-white pb-6 z-10">
+                                        <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Awaiting Table</h4>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-2xl font-black text-gray-900">{matches.filter(m => m.status === MatchStatus.TABLE_PENDING).length}</span>
+                                            <span className="text-[10px] font-bold text-amber-500 px-2 py-0.5 bg-amber-50 rounded-full border border-amber-100">Pending</span>
+                                        </div>
+                                    </div>
+                                    
+                                    <div className="space-y-4">
+                                        {matches.filter(m => m.status === MatchStatus.TABLE_PENDING).map(match => (
+                                            <div 
+                                                key={match.id}
+                                                draggable
+                                                onDragStart={(e) => {
+                                                    e.dataTransfer.setData('matchId', match.id);
+                                                    e.dataTransfer.effectAllowed = 'move';
+                                                    e.currentTarget.classList.add('opacity-50', 'scale-95');
+                                                } }
+                                                onDragEnd={(e) => {
+                                                    e.currentTarget.classList.remove('opacity-50', 'scale-95');
+                                                } }
+                                                className="p-4 rounded-2xl border border-gray-100 bg-white shadow-sm hover:border-blue-300 hover:shadow-md transition-all cursor-move active:scale-95 group relative overflow-hidden"
+                                            >
+                                                <div className="absolute top-0 left-0 w-1 h-full bg-amber-400" />
+                                                <div className="flex justify-between items-center mb-3">
+                                                    <span className="text-[10px] font-black text-gray-400">Round {match.round_number}</span>
+                                                    <span className="w-6 h-6 rounded-full bg-gray-50 flex items-center justify-center group-hover:bg-blue-50 transition-colors">
+                                                        <span className="text-[10px]">⠿</span>
+                                                    </span>
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    <p className="text-xs font-black text-gray-900 truncate">{match.p1_name}</p>
+                                                    <div className="flex items-center gap-2 opacity-30">
+                                                        <div className="h-px bg-gray-900 flex-1" />
+                                                        <span className="text-[8px] font-black uppercase">vs</span>
+                                                        <div className="h-px bg-gray-900 flex-1" />
+                                                    </div>
+                                                    <p className="text-xs font-black text-gray-900 truncate">
+                                                        {match.p2_id === 'tobias-boon' ? (
+                                                            <span className="text-purple-600 italic">Tobias Boon (Bye)</span>
+                                                        ) : (
+                                                            match.p2_name
+                                                        )}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>

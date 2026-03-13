@@ -876,7 +876,7 @@ router.get('/api/tournaments/:id/registrations', async (request, env: Env) => {
 
 	const { id } = request.params;
 	const { results } = await env.DB.prepare(
-		`SELECT tr.*, p.name as player_name, d.name as deck_name 
+		`SELECT tr.*, COALESCE(tr.status, 'active') as status, p.name as player_name, d.name as deck_name 
 		 FROM tournament_registrations tr
 		 JOIN players p ON tr.player_id = p.id
 		 LEFT JOIN decks d ON tr.deck_id = d.id
@@ -925,7 +925,22 @@ router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, e
 		const wins = 'wins' in body ? body.wins : reg.wins;
 		const losses = 'losses' in body ? body.losses : reg.losses;
 		const draws = 'draws' in body ? body.draws : reg.draws;
-		const dropped = 'dropped' in body ? (body.dropped ? 1 : 0) : reg.dropped;
+		const status = 'status' in body ? body.status : (reg.status || 'active');
+
+		// Elimination Constraint: Cannot eliminate if player has active matches
+		if (status === 'eliminated' && reg.status !== 'eliminated') {
+			const activeMatch = await env.DB.prepare(
+				`SELECT id FROM matches 
+				 WHERE tournament_id = ? 
+				 AND status IN ('TABLE_PENDING', 'AWAITING_MATCH', 'ON_GOING') 
+				 AND (p1_id = ? OR p2_id = ?) 
+				 LIMIT 1`
+			).bind(tournamentId, reg.player_id, reg.player_id).first();
+			
+			if (activeMatch) {
+				return error(400, 'Cannot eliminate player while they have an active or scheduled match');
+			}
+		}
 
 		const statements = [];
 
@@ -933,13 +948,14 @@ router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, e
 		statements.push(
 			env.DB.prepare(
 				`UPDATE tournament_registrations 
-				 SET deck_id = ?, points = ?, wins = ?, losses = ?, draws = ?, dropped = ? 
+				 SET deck_id = ?, points = ?, wins = ?, losses = ?, draws = ?, status = ? 
 				 WHERE id = ?`
-			).bind(deck_id || null, points || 0, wins || 0, losses || 0, draws || 0, dropped, id)
+			).bind(deck_id || null, points || 0, wins || 0, losses || 0, draws || 0, status, id)
 		);
 
-		// 3. Forfeit Logic: If newly dropped, find current non-completed match and award win to opponent
-		if (dropped && !reg.dropped) {
+		// 3. Forfeit/Safety Logic: If status becomes non-active, award win to opponent in current match
+		const isNoLongerActive = (status === 'dropped' || status === 'eliminated') && reg.status === 'active';
+		if (isNoLongerActive) {
 			const activeMatch = await env.DB.prepare(
 				`SELECT * FROM matches 
 				 WHERE tournament_id = ? 
@@ -1036,7 +1052,7 @@ router.post('/api/tournaments/:id/pairings', async (request, env: Env) => {
 	try {
 		// 1. Get active players
 		const { results: registrations } = await env.DB.prepare(
-			`SELECT player_id FROM tournament_registrations WHERE tournament_id = ? AND dropped = 0`
+			`SELECT player_id FROM tournament_registrations WHERE tournament_id = ? AND status = 'active'`
 		).bind(tournamentId).all();
 
 		if (registrations.length < 2) {

@@ -221,11 +221,9 @@ export default function EventsPage() {
                                 <div className="p-6">
                                     <div className="flex justify-between items-start mb-4">
                                         <div className="flex gap-2">
-                                            {event.status !== 'draft' && (
-                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${getStatusColor(event.status)}`}>
-                                                    {event.status}
-                                                </span>
-                                            )}
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${getStatusColor(event.status)}`}>
+                                                {event.status}
+                                            </span>
                                             {event.current_round > 0 && (
                                                 <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase border bg-purple-100 text-purple-700 border-purple-200">
                                                     Round {event.current_round}
