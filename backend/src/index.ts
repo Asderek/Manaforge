@@ -693,6 +693,354 @@ router.delete('/api/decks/:id/cards/:cardId', async (request, env: Env) => {
 });
 
 // ──────────────────────────────────────────────
+// Players CRUD
+// ──────────────────────────────────────────────
+
+router.get('/api/players', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { results } = await env.DB.prepare(
+		`SELECT * FROM players ORDER BY name ASC`
+	).all();
+
+	return json({ success: true, players: results });
+});
+
+router.post('/api/players', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	try {
+		const { name, dob, country, email } = await request.json() as any;
+		if (!name) return error(400, 'Name is required');
+
+		const id = crypto.randomUUID();
+		await env.DB.prepare(
+			`INSERT INTO players (id, name, dob, country, email)
+			 VALUES (?, ?, ?, ?, ?)`
+		).bind(id, name, dob || null, country || null, email || null).run();
+
+		return json({ success: true, player: { id, name, dob, country, email } });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.put('/api/players/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	try {
+		const { name, dob, country, email } = await request.json() as any;
+		await env.DB.prepare(
+			`UPDATE players SET name = ?, dob = ?, country = ?, email = ? WHERE id = ?`
+		).bind(name, dob || null, country || null, email || null, id).run();
+
+		return json({ success: true });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.delete('/api/players/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	await env.DB.prepare(`DELETE FROM players WHERE id = ?`).bind(id).run();
+	return json({ success: true });
+});
+
+// ──────────────────────────────────────────────
+// Tournaments CRUD
+// ──────────────────────────────────────────────
+
+router.get('/api/tournaments', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { results } = await env.DB.prepare(
+		`SELECT * FROM tournaments ORDER BY start_date DESC`
+	).all();
+
+	return json({ success: true, tournaments: results });
+});
+
+router.get('/api/tournaments/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	const tournament = await env.DB.prepare(
+		`SELECT * FROM tournaments WHERE id = ?`
+	).bind(id).first();
+
+	if (!tournament) return error(404, 'Tournament not found');
+
+	return json({ success: true, tournament });
+});
+
+router.post('/api/tournaments', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	try {
+		const { name, start_date, end_date, location, num_tables, format } = await request.json() as any;
+		if (!name || !start_date || !end_date) return error(400, 'Name, Start Date, and End Date are required');
+
+		const id = crypto.randomUUID();
+		await env.DB.prepare(
+			`INSERT INTO tournaments (id, name, start_date, end_date, location, num_tables, format, status)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`
+		).bind(id, name, start_date, end_date, location || null, num_tables || 0, format || null).run();
+
+		return json({ success: true, tournament: { id, name, start_date, end_date, location, num_tables, format, status: 'draft' } });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.put('/api/tournaments/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	try {
+		const { name, start_date, end_date, location, num_tables, format, status } = await request.json() as any;
+		await env.DB.prepare(
+			`UPDATE tournaments SET name = ?, start_date = ?, end_date = ?, location = ?, num_tables = ?, format = ?, status = ? WHERE id = ?`
+		).bind(name, start_date, end_date, location || null, num_tables || 0, format || null, status || 'draft', id).run();
+
+		return json({ success: true });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.delete('/api/tournaments/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	await env.DB.prepare(`DELETE FROM tournaments WHERE id = ?`).bind(id).run();
+	return json({ success: true });
+});
+
+// ──────────────────────────────────────────────
+// Tournament Registrations & Standings
+// ──────────────────────────────────────────────
+
+router.get('/api/tournaments/:id/registrations', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	const { results } = await env.DB.prepare(
+		`SELECT tr.*, p.name as player_name, d.name as deck_name 
+		 FROM tournament_registrations tr
+		 JOIN players p ON tr.player_id = p.id
+		 LEFT JOIN decks d ON tr.deck_id = d.id
+		 WHERE tr.tournament_id = ?
+		 ORDER BY tr.points DESC, tr.wins DESC`
+	).bind(id).all();
+
+	return json({ success: true, registrations: results });
+});
+
+router.post('/api/tournaments/:id/registrations', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id: tournamentId } = request.params;
+	try {
+		const { player_id, deck_id } = await request.json() as any;
+		if (!player_id) return error(400, 'Player ID is required');
+
+		const id = crypto.randomUUID();
+		await env.DB.prepare(
+			`INSERT INTO tournament_registrations (id, tournament_id, player_id, deck_id)
+			 VALUES (?, ?, ?, ?)`
+		).bind(id, tournamentId, player_id, deck_id || null).run();
+
+		return json({ success: true, registration: { id, tournament_id: tournamentId, player_id, deck_id } });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	try {
+		const { deck_id, points, wins, losses, draws, dropped } = await request.json() as any;
+		await env.DB.prepare(
+			`UPDATE tournament_registrations 
+			 SET deck_id = ?, points = ?, wins = ?, losses = ?, draws = ?, dropped = ? 
+			 WHERE id = ?`
+		).bind(deck_id || null, points || 0, wins || 0, losses || 0, draws || 0, dropped ? 1 : 0, id).run();
+
+		return json({ success: true });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.delete('/api/tournaments/:tournamentId/registrations/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	await env.DB.prepare(`DELETE FROM tournament_registrations WHERE id = ?`).bind(id).run();
+	return json({ success: true });
+});
+
+// ──────────────────────────────────────────────
+// Matches
+// ──────────────────────────────────────────────
+
+router.get('/api/tournaments/:id/matches', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	const { results } = await env.DB.prepare(
+		`SELECT m.*, p1.name as p1_name, p2.name as p2_name 
+		 FROM matches m
+		 JOIN players p1 ON m.p1_id = p1.id
+		 JOIN players p2 ON m.p2_id = p2.id
+		 WHERE m.tournament_id = ?
+		 ORDER BY m.round_number DESC, m.table_number ASC`
+	).bind(id).all();
+
+	return json({ success: true, matches: results });
+});
+
+router.post('/api/tournaments/:id/pairings', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id: tournamentId } = request.params;
+	try {
+		// 1. Get active players
+		const { results: registrations } = await env.DB.prepare(
+			`SELECT player_id FROM tournament_registrations WHERE tournament_id = ? AND dropped = 0`
+		).bind(tournamentId).all();
+
+		if (registrations.length < 2) {
+			return error(400, 'Need at least 2 players to generate rounds');
+		}
+
+		// 2. Determine round number
+		const lastMatch = await env.DB.prepare(
+			`SELECT MAX(round_number) as last_round FROM matches WHERE tournament_id = ?`
+		).bind(tournamentId).first();
+		const roundNumber = ((lastMatch?.last_round as number) || 0) + 1;
+
+		// 3. Shuffle players (Fisher-Yates)
+		const playerIds = registrations.map((r: any) => r.player_id);
+		for (let i = playerIds.length - 1; i > 0; i--) {
+			const j = Math.floor(Math.random() * (i + 1));
+			[playerIds[i], playerIds[j]] = [playerIds[j], playerIds[i]];
+		}
+
+		// 4. Create matches
+		const matches = [];
+		let tableNumber = 1;
+		for (let i = 0; i < playerIds.length; i += 2) {
+			const p1 = playerIds[i];
+			const p2 = playerIds[i + 1] || 'tobias-boon'; // Tobias Boon handles the bye
+			
+			matches.push({
+				id: crypto.randomUUID(),
+				tournament_id: tournamentId,
+				round_number: roundNumber,
+				p1_id: p1,
+				p2_id: p2,
+				table_number: tableNumber++,
+				status: 'pending'
+			});
+		}
+
+		// 5. Batch insert
+		const statements = matches.map(m => 
+			env.DB.prepare(
+				`INSERT INTO matches (id, tournament_id, round_number, p1_id, p2_id, table_number, status)
+				 VALUES (?, ?, ?, ?, ?, ?, ?)`
+			).bind(m.id, m.tournament_id, m.round_number, m.p1_id, m.p2_id, m.table_number, m.status)
+		);
+
+		await env.DB.batch(statements);
+
+		return json({ success: true, count: matches.length, round: roundNumber });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.post('/api/tournaments/:id/matches', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id: tournamentId } = request.params;
+	try {
+		const { round_number, p1_id, p2_id, table_number } = await request.json() as any;
+		if (!round_number || !p1_id || !p2_id) return error(400, 'Round Number, Player 1 ID, and Player 2 ID are required');
+
+		const id = crypto.randomUUID();
+		await env.DB.prepare(
+			`INSERT INTO matches (id, tournament_id, round_number, p1_id, p2_id, table_number, status)
+			 VALUES (?, ?, ?, ?, ?, ?, 'pending')`
+		).bind(id, tournamentId, round_number, p1_id, p2_id, table_number || null).run();
+
+		return json({ success: true, match: { id, tournament_id: tournamentId, round_number, p1_id, p2_id, table_number, status: 'pending' } });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.put('/api/tournaments/:tournamentId/matches/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	try {
+		const { p1_score, p2_score, draws, status, table_number, scheduled_at } = await request.json() as any;
+		await env.DB.prepare(
+			`UPDATE matches 
+			 SET p1_score = ?, p2_score = ?, draws = ?, status = ?, table_number = ?, scheduled_at = ? 
+			 WHERE id = ?`
+		).bind(
+			p1_score || 0, 
+			p2_score || 0, 
+			draws || 0, 
+			status || 'pending', 
+			table_number || null, 
+			scheduled_at || null, 
+			id
+		).run();
+
+		return json({ success: true });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
+});
+
+router.delete('/api/tournaments/:tournamentId/matches/:id', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const { id } = request.params;
+	await env.DB.prepare(`DELETE FROM matches WHERE id = ?`).bind(id).run();
+	return json({ success: true });
+});
+
+
+
+// ──────────────────────────────────────────────
 // Share Links (Refactored)
 // ──────────────────────────────────────────────
 // Update existing handlers to use deck_id and decks table

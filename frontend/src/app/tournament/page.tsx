@@ -15,17 +15,14 @@ export default function TournamentPage() {
                     </div>
                     
                     <nav className="flex items-center gap-6">
+                        <Link href="/tournament/events" className="text-sm font-medium text-gray-500 hover:text-blue-600 transition-colors">
+                            Events
+                        </Link>
                         <Link href="/tournament/players" className="text-sm font-medium text-gray-500 hover:text-purple-600 transition-colors">
                             Players
                         </Link>
-                        <Link href="/tournament/matches" className="text-sm font-medium text-gray-500 hover:text-purple-600 transition-colors">
-                            Matches
-                        </Link>
-                        <Link href="/tournament/calendar" className="text-sm font-medium text-gray-500 hover:text-purple-600 transition-colors">
+                        <Link href="/tournament/calendar" className="text-sm font-medium text-gray-500 hover:text-green-600 transition-colors">
                             Calendar
-                        </Link>
-                        <Link href="/tournament/timeline" className="text-sm font-medium text-gray-500 hover:text-purple-600 transition-colors">
-                            Timeline
                         </Link>
                     </nav>
                 </div>
@@ -48,20 +45,34 @@ export default function TournamentPage() {
                     </div>
                 </div>
 
-                <div className="bg-purple-50 border border-purple-100 rounded-2xl p-12 text-center">
-                    <div className="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center text-4xl mx-auto mb-6">
-                        🏗️
-                    </div>
-                    <h2 className="text-2xl font-bold text-purple-900 mb-4">Under Construction</h2>
-                    <p className="text-purple-700 max-w-md mx-auto mb-8">
-                        The Tournament Arena is coming soon. Soon you'll be able to manage players, 
-                        track matches, and coordinate your local MTG community here.
-                    </p>
-                    <div className="flex justify-center gap-4">
-                        <Link href="/" className="bg-white border border-purple-200 text-purple-600 px-6 py-2 rounded-lg font-medium hover:bg-purple-50 transition-colors">
-                            Back to Dashboard
-                        </Link>
-                    </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    {/* Players Portal */}
+                    <Link href="/tournament/players" className="group block">
+                        <div className="h-full p-8 bg-white border border-gray-200 group-hover:border-purple-500 rounded-2xl shadow-sm group-hover:shadow-xl transition-all flex flex-col items-center text-center">
+                            <div className="w-16 h-16 bg-purple-100 rounded-xl flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform">
+                                👥
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 mb-2">Players</h3>
+                            <p className="text-gray-600 mb-6">Manage your local community, track player stats and history.</p>
+                            <span className="text-purple-600 font-bold group-hover:translate-x-1 transition-transform inline-flex items-center">
+                                Manage Players →
+                            </span>
+                        </div>
+                    </Link>
+
+                    {/* Events Portal */}
+                    <Link href="/tournament/events" className="group block">
+                        <div className="h-full p-8 bg-white border border-gray-200 group-hover:border-purple-500 rounded-2xl shadow-sm group-hover:shadow-xl transition-all flex flex-col items-center text-center">
+                            <div className="w-16 h-16 bg-blue-100 rounded-xl flex items-center justify-center text-3xl mb-6 group-hover:scale-110 transition-transform">
+                                ⚔️
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900 mb-2">Events</h3>
+                            <p className="text-gray-600 mb-6">Create tournaments, manage matches and automatic standings.</p>
+                            <span className="text-blue-600 font-bold group-hover:translate-x-1 transition-transform inline-flex items-center">
+                                Manage Events →
+                            </span>
+                        </div>
+                    </Link>
                 </div>
             </div>
         </main>
