@@ -33,6 +33,8 @@ export default function EventsPage() {
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
     const [showMapPicker, setShowMapPicker] = useState(false);
+    const [isMapViewOnly, setIsMapViewOnly] = useState(false);
+    const [viewLocation, setViewLocation] = useState('');
     const [mapCenter, setMapCenter] = useState(defaultCenter);
     const [autocomplete, setAutocomplete] = useState<google.maps.places.Autocomplete | null>(null);
     const [editingEvent, setEditingEvent] = useState<Tournament | null>(null);
@@ -103,6 +105,27 @@ export default function EventsPage() {
         } finally {
             setIsSubmitting(false);
         }
+    };
+
+    const handleViewLocation = (location: string) => {
+        if (!isLoaded) {
+            addToast('Maps not loaded yet', 'warning');
+            return;
+        }
+        setIsMapViewOnly(true);
+        setViewLocation(location);
+        const geocoder = new google.maps.Geocoder();
+        geocoder.geocode({ address: location }, (results, status) => {
+            if (status === "OK" && results?.[0]) {
+                setMapCenter({
+                    lat: results[0].geometry.location.lat(),
+                    lng: results[0].geometry.location.lng()
+                });
+                setShowMapPicker(true);
+            } else {
+                addToast('Could not find location on map', 'error');
+            }
+        });
     };
 
     const handleEdit = (event: Tournament) => {
@@ -211,14 +234,12 @@ export default function EventsPage() {
                                     <h3 className="font-bold text-gray-900 mb-1 group-hover:text-blue-600 transition-colors">{event.name}</h3>
                                     <div className="text-xs text-gray-500 mb-4">
                                         {event.location ? (
-                                            <a 
-                                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(event.location)}`}
-                                                target="_blank"
-                                                rel="noopener noreferrer"
-                                                className="flex items-center gap-1 hover:text-blue-600 hover:underline transition-colors"
+                                            <button 
+                                                onClick={() => handleViewLocation(event.location!)}
+                                                className="flex items-center gap-1 hover:text-blue-600 hover:underline transition-colors text-left"
                                             >
                                                 📍 {event.location}
-                                            </a>
+                                            </button>
                                         ) : (
                                             <span className="flex items-center gap-1">📍 Local Game Store</span>
                                         )}
@@ -309,7 +330,10 @@ export default function EventsPage() {
                                         />
                                         <button
                                             type="button"
-                                            onClick={() => setShowMapPicker(true)}
+                                            onClick={() => {
+                                                setIsMapViewOnly(false);
+                                                setShowMapPicker(true);
+                                            }}
                                             className="absolute right-1 top-1 bottom-1 px-2.5 bg-gray-50 text-gray-500 rounded-md hover:bg-blue-50 hover:text-blue-600 transition-all text-[10px] font-black uppercase flex items-center gap-1 border border-transparent hover:border-blue-100"
                                             title="Pick on Map"
                                         >
@@ -391,8 +415,12 @@ export default function EventsPage() {
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
                         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
                             <div>
-                                <h3 className="font-bold text-gray-900 text-lg">Pick Venue Location</h3>
-                                <p className="text-[10px] text-gray-500 uppercase font-black">Search or click on the map</p>
+                                <h3 className="font-bold text-gray-900 text-lg">
+                                    {isMapViewOnly ? 'Venue Location' : 'Pick Venue Location'}
+                                </h3>
+                                <p className="text-[10px] text-gray-500 uppercase font-black">
+                                    {isMapViewOnly ? 'Location preview' : 'Search or click on the map'}
+                                </p>
                             </div>
                             <button onClick={() => setShowMapPicker(false)} className="text-gray-400 hover:text-gray-600">✕</button>
                         </div>
@@ -424,31 +452,33 @@ export default function EventsPage() {
                             </div>
                         ) : (
                             <div className="p-6 space-y-4">
-                                <div className="relative">
-                                    <Autocomplete
-                                        onLoad={setAutocomplete}
-                                        onPlaceChanged={() => {
-                                            if (autocomplete) {
-                                                const place = autocomplete.getPlace();
-                                                if (place.formatted_address) {
-                                                    setFormData({ ...formData, location: place.formatted_address });
-                                                    if (place.geometry?.location) {
-                                                        setMapCenter({
-                                                            lat: place.geometry.location.lat(),
-                                                            lng: place.geometry.location.lng()
-                                                        });
+                                {!isMapViewOnly && (
+                                    <div className="relative">
+                                        <Autocomplete
+                                            onLoad={setAutocomplete}
+                                            onPlaceChanged={() => {
+                                                if (autocomplete) {
+                                                    const place = autocomplete.getPlace();
+                                                    if (place.formatted_address) {
+                                                        setFormData({ ...formData, location: place.formatted_address });
+                                                        if (place.geometry?.location) {
+                                                            setMapCenter({
+                                                                lat: place.geometry.location.lat(),
+                                                                lng: place.geometry.location.lng()
+                                                            });
+                                                        }
                                                     }
                                                 }
-                                            }
-                                        }}
-                                    >
-                                        <input
-                                            type="text"
-                                            placeholder="Search for a location..."
-                                            className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-gray-900 shadow-sm"
-                                        />
-                                    </Autocomplete>
-                                </div>
+                                            }}
+                                        >
+                                            <input
+                                                type="text"
+                                                placeholder="Search for a location..."
+                                                className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-gray-900 shadow-sm"
+                                            />
+                                        </Autocomplete>
+                                    </div>
+                                )}
                                 
                                 <div className="rounded-xl overflow-hidden border border-gray-200 shadow-inner">
                                     <GoogleMap
@@ -456,7 +486,7 @@ export default function EventsPage() {
                                         center={mapCenter}
                                         zoom={15}
                                         onClick={(e) => {
-                                            if (e.latLng) {
+                                            if (!isMapViewOnly && e.latLng) {
                                                 const lat = e.latLng.lat();
                                                 const lng = e.latLng.lng();
                                                 setMapCenter({ lat, lng });
@@ -477,16 +507,18 @@ export default function EventsPage() {
 
                                 <div className="pt-2 flex justify-end gap-3">
                                     <div className="flex-1">
-                                        <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Selected Place</p>
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">
+                                            {isMapViewOnly ? 'Venue Address' : 'Selected Place'}
+                                        </p>
                                         <p className="text-xs text-gray-700 font-medium truncate bg-gray-50 p-2 rounded border border-gray-100 italic">
-                                            {formData.location || 'Click or search to select...'}
+                                            {isMapViewOnly ? viewLocation : (formData.location || 'Click or search to select...')}
                                         </p>
                                     </div>
                                     <button
                                         onClick={() => setShowMapPicker(false)}
                                         className="px-8 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100 self-end h-10"
                                     >
-                                        Confirm
+                                        {isMapViewOnly ? 'Close' : 'Confirm'}
                                     </button>
                                 </div>
                             </div>
