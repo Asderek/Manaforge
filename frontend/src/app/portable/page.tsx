@@ -1,18 +1,32 @@
 "use client";
 
 import React, { useEffect, useState, useRef, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { decompressDeck, PortableDeck } from '@/app/utils/deckSharing';
+import { useToast } from '../components/Toast';
+
+type User = {
+    id: string;
+    email: string;
+    display_name: string;
+};
 
 function PortableViewer() {
     const searchParams = useSearchParams();
+    const router = useRouter();
+    const { addToast } = useToast();
     const [deck, setDeck] = useState<PortableDeck | null>(null);
+    const [user, setUser] = useState<User | null>(null);
     const [error, setError] = useState('');
     const [viewMode, setViewMode] = useState<'table' | 'grid'>('grid');
+    const [importing, setImporting] = useState(false);
     const scryfallCache = useRef<Record<string, string | null>>({});
 
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
+
     useEffect(() => {
+        // 1. Check for deck data
         const data = searchParams.get('deck');
         if (data) {
             const decoded = decompressDeck(data);
@@ -24,7 +38,61 @@ function PortableViewer() {
         } else {
             setError('No deck data found in link.');
         }
-    }, [searchParams]);
+
+        // 2. Check auth status
+        const checkAuth = async () => {
+            try {
+                const res = await fetch(`${apiUrl}/api/auth/me`, { credentials: 'include' });
+                const data = await res.json();
+                if (data.success && data.user) {
+                    setUser(data.user);
+                }
+            } catch {
+                // Not logged in
+            }
+        };
+        checkAuth();
+    }, [searchParams, apiUrl]);
+
+    const handleImport = async () => {
+        if (!deck || !user) return;
+        setImporting(true);
+        try {
+            // 1. Create a new project
+            const createRes = await fetch(`${apiUrl}/api/projects`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ 
+                    name: `Import: ${deck.n}`,
+                    description: `Imported from a portable link on ${new Date().toLocaleDateString()}`
+                })
+            });
+            const createData = await createRes.json();
+            if (!createData.success) throw new Error(createData.error || 'Failed to create project');
+
+            const projectId = createData.project.id;
+
+            // 2. Add cards bulk
+            const cardsRes = await fetch(`${apiUrl}/api/projects/${projectId}/cards`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ 
+                    cards: deck.c.map(c => ({ card_name: c.n, quantity: c.q }))
+                })
+            });
+            const cardsData = await cardsRes.json();
+            if (!cardsData.success) throw new Error(cardsData.error || 'Failed to import cards');
+
+            addToast('Deck imported successfully!', 'success');
+            router.push(`/projects/${projectId}`);
+        } catch (err: any) {
+            addToast(err.message || 'Error importing deck', 'error');
+        } finally {
+            setImporting(false);
+        }
+    };
 
     if (error) {
         return (
@@ -51,6 +119,18 @@ function PortableViewer() {
                     </div>
                     
                     <div className="flex items-center gap-6">
+                        {user && (
+                            <button
+                                onClick={handleImport}
+                                disabled={importing}
+                                className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer flex items-center gap-2"
+                            >
+                                {importing ? (
+                                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                                ) : '📥'} {importing ? 'Importing...' : 'Import to My Projects'}
+                            </button>
+                        )}
+
                         {/* View Toggle */}
                         <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
                             <button
@@ -66,9 +146,11 @@ function PortableViewer() {
                                 Grid
                             </button>
                         </div>
-                        <Link href="/" className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors">
-                            Create Your Own Project →
-                        </Link>
+                        {!user && (
+                            <Link href="/" className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors">
+                                Create Your Own Project →
+                            </Link>
+                        )}
                     </div>
                 </div>
             </div>
@@ -105,13 +187,15 @@ function PortableViewer() {
                     </div>
                 )}
                 
-                <div className="mt-12 p-6 bg-blue-50 border border-blue-100 rounded-lg text-center">
-                    <h3 className="text-blue-900 font-bold mb-2">Want to save this deck?</h3>
-                    <p className="text-blue-700 text-sm mb-4">Log in or create an account to import this list into your own projects.</p>
-                    <Link href="/register" className="inline-block bg-blue-600 text-white px-6 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition-colors">
-                        Get Started
-                    </Link>
-                </div>
+                {!user && (
+                    <div className="mt-12 p-6 bg-blue-50 border border-blue-100 rounded-lg text-center">
+                        <h3 className="text-blue-900 font-bold mb-2">Want to save this deck?</h3>
+                        <p className="text-blue-700 text-sm mb-4">Log in or create an account to import this list into your own projects.</p>
+                        <Link href="/register" className="inline-block bg-blue-600 text-white px-6 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition-colors">
+                            Get Started
+                        </Link>
+                    </div>
+                )}
             </div>
         </main>
     );
