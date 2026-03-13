@@ -56,8 +56,8 @@ export default function AppHeader() {
                         <span className="text-sm text-gray-400">...</span>
                     ) : user ? (
                         <>
-                            <Link href="/projects" className="text-sm text-gray-600 hover:text-blue-600 transition-colors font-medium">
-                                My Projects
+                            <Link href="/decks" className="text-sm text-gray-600 hover:text-blue-600 transition-colors font-medium">
+                                My Decks
                             </Link>
                             {user.role === 'admin' && (
                                 <Link href="/admin" className="text-sm text-gray-600 hover:text-blue-600 transition-colors font-medium">

@@ -451,7 +451,7 @@ router.post('/api/custom-cards', async (request, env: Env) => {
 });
 
 // ──────────────────────────────────────────────
-// Projects CRUD
+// Decks CRUD
 // ──────────────────────────────────────────────
 
 // Helper: require auth and return user or error response
@@ -461,137 +461,137 @@ async function requireAuth(request: IRequest, env: Env) {
 	return user;
 }
 
-// List all projects for the logged-in user
-router.get('/api/projects', async (request, env: Env) => {
+// List all decks for the logged-in user
+router.get('/api/decks', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
 		const { results } = await env.DB.prepare(
-			`SELECT p.*, (SELECT COUNT(*) FROM project_cards pc WHERE pc.project_id = p.id) as card_count
-			 FROM projects p
-			 WHERE p.user_id = ?
-			 ORDER BY p.updated_at DESC`
+			`SELECT d.*, (SELECT COUNT(*) FROM deck_cards dc WHERE dc.deck_id = d.id) as card_count
+			 FROM decks d
+			 WHERE d.user_id = ?
+			 ORDER BY d.updated_at DESC`
 		).bind(user.user_id).all();
 
-		return json({ success: true, projects: results });
+		return json({ success: true, decks: results });
 	} catch (e) {
-		console.error("List projects error:", e);
+		console.error("List decks error:", e);
 		return error(500, 'Internal Server Error');
 	}
 });
 
-// Create a new project
-router.post('/api/projects', async (request, env: Env) => {
+// Create a new deck
+router.post('/api/decks', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
 		const { name, description } = await request.json() as any;
 
-		const projectId = crypto.randomUUID();
+		const deckId = crypto.randomUUID();
 		await env.DB.prepare(
-			`INSERT INTO projects (id, user_id, name, description)
+			`INSERT INTO decks (id, user_id, name, description)
 			 VALUES (?, ?, ?, ?)`
-		).bind(projectId, user.user_id, name || 'Untitled Deck', description || null).run();
+		).bind(deckId, user.user_id, name || 'Untitled Deck', description || null).run();
 
-		return json({ success: true, project: { id: projectId, name: name || 'Untitled Deck', description: description || null } });
+		return json({ success: true, deck: { id: deckId, name: name || 'Untitled Deck', description: description || null } });
 	} catch (e) {
-		console.error("Create project error:", e);
+		console.error("Create deck error:", e);
 		return error(500, 'Internal Server Error');
 	}
 });
 
-// Get a single project with all its cards
-router.get('/api/projects/:id', async (request, env: Env) => {
+// Get a single deck with all its cards
+router.get('/api/decks/:id', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
-		const projectId = request.params.id;
+		const deckId = request.params.id;
 
-		const project: any = await env.DB.prepare(
-			`SELECT * FROM projects WHERE id = ? AND user_id = ?`
-		).bind(projectId, user.user_id).first();
+		const deck: any = await env.DB.prepare(
+			`SELECT * FROM decks WHERE id = ? AND user_id = ?`
+		).bind(deckId, user.user_id).first();
 
-		if (!project) return error(404, 'Project not found');
+		if (!deck) return error(404, 'Deck not found');
 
 		const { results: cards } = await env.DB.prepare(
-			`SELECT pc.*, cc.card_image as custom_image
-			 FROM project_cards pc
-			 LEFT JOIN custom_cards cc ON pc.card_name = cc.card_name AND cc.user_id = ?
-			 WHERE pc.project_id = ?
-			 ORDER BY pc.sort_order ASC, pc.created_at ASC`
-		).bind(user.user_id, projectId).all();
+			`SELECT dc.*, cc.card_image as custom_image
+			 FROM deck_cards dc
+			 LEFT JOIN custom_cards cc ON dc.card_name = cc.card_name AND cc.user_id = ?
+			 WHERE dc.deck_id = ?
+			 ORDER BY dc.sort_order ASC, dc.created_at ASC`
+		).bind(user.user_id, deckId).all();
 
-		return json({ success: true, project: { ...project, cards } });
+		return json({ success: true, deck: { ...deck, cards } });
 	} catch (e) {
-		console.error("Get project error:", e);
+		console.error("Get deck error:", e);
 		return error(500, 'Internal Server Error');
 	}
 });
 
-// Update project metadata (name, description)
-router.put('/api/projects/:id', async (request, env: Env) => {
+// Update deck metadata (name, description)
+router.put('/api/decks/:id', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
-		const projectId = request.params.id;
+		const deckId = request.params.id;
 		const { name, description } = await request.json() as any;
 
 		const result = await env.DB.prepare(
-			`UPDATE projects SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+			`UPDATE decks SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP
 			 WHERE id = ? AND user_id = ?`
-		).bind(name, description || null, projectId, user.user_id).run();
+		).bind(name, description || null, deckId, user.user_id).run();
 
-		if (result.meta.changes === 0) return error(404, 'Project not found');
+		if (result.meta.changes === 0) return error(404, 'Deck not found');
 
-		return json({ success: true, message: 'Project updated' });
+		return json({ success: true, message: 'Deck updated' });
 	} catch (e) {
-		console.error("Update project error:", e);
+		console.error("Update deck error:", e);
 		return error(500, 'Internal Server Error');
 	}
 });
 
-// Delete a project (cascades to cards)
-router.delete('/api/projects/:id', async (request, env: Env) => {
+// Delete a deck (cascades to cards)
+router.delete('/api/decks/:id', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
-		const projectId = request.params.id;
+		const deckId = request.params.id;
 
 		// D1 doesn't always enforce ON DELETE CASCADE, so clean up manually
 		await env.DB.batch([
-			env.DB.prepare(`DELETE FROM project_cards WHERE project_id = ?`).bind(projectId),
-			env.DB.prepare(`DELETE FROM projects WHERE id = ? AND user_id = ?`).bind(projectId, user.user_id)
+			env.DB.prepare(`DELETE FROM deck_cards WHERE deck_id = ?`).bind(deckId),
+			env.DB.prepare(`DELETE FROM decks WHERE id = ? AND user_id = ?`).bind(deckId, user.user_id)
 		]);
 
-		return json({ success: true, message: 'Project deleted' });
+		return json({ success: true, message: 'Deck deleted' });
 	} catch (e) {
-		console.error("Delete project error:", e);
+		console.error("Delete deck error:", e);
 		return error(500, 'Internal Server Error');
 	}
 });
 
 // ──────────────────────────────────────────────
-// Project Cards CRUD
+// Deck Cards CRUD
 // ──────────────────────────────────────────────
 
-// Bulk import cards into a project (from a pasted decklist)
-router.post('/api/projects/:id/cards', async (request, env: Env) => {
+// Bulk import cards into a deck (from a pasted decklist)
+router.post('/api/decks/:id/cards', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
-		const projectId = request.params.id;
+		const deckId = request.params.id;
 
-		// Verify project ownership
-		const project: any = await env.DB.prepare(
-			`SELECT id FROM projects WHERE id = ? AND user_id = ?`
-		).bind(projectId, user.user_id).first();
-		if (!project) return error(404, 'Project not found');
+		// Verify deck ownership
+		const deck: any = await env.DB.prepare(
+			`SELECT id FROM decks WHERE id = ? AND user_id = ?`
+		).bind(deckId, user.user_id).first();
+		if (!deck) return error(404, 'Deck not found');
 
 		const { cards } = await request.json() as any;
 		// cards: [{ card_name: string, quantity: number }]
@@ -602,22 +602,22 @@ router.post('/api/projects/:id/cards', async (request, env: Env) => {
 
 		// Get the current max sort_order so we append after existing cards
 		const maxSort: any = await env.DB.prepare(
-			`SELECT COALESCE(MAX(sort_order), -1) as max_sort FROM project_cards WHERE project_id = ?`
-		).bind(projectId).first();
+			`SELECT COALESCE(MAX(sort_order), -1) as max_sort FROM deck_cards WHERE deck_id = ?`
+		).bind(deckId).first();
 		let nextSort = (maxSort?.max_sort ?? -1) + 1;
 
 		const stmts = cards.map((card: any) => {
 			const id = crypto.randomUUID();
 			const stmt = env.DB.prepare(
-				`INSERT INTO project_cards (id, project_id, card_name, quantity, sort_order)
+				`INSERT INTO deck_cards (id, deck_id, card_name, quantity, sort_order)
 				 VALUES (?, ?, ?, ?, ?)`
-			).bind(id, projectId, card.card_name, card.quantity || 1, nextSort++);
+			).bind(id, deckId, card.card_name, card.quantity || 1, nextSort++);
 			return stmt;
 		});
 
-		// Also touch updated_at on the project
+		// Also touch updated_at on the deck
 		stmts.push(
-			env.DB.prepare(`UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(projectId)
+			env.DB.prepare(`UPDATE decks SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(deckId)
 		);
 
 		await env.DB.batch(stmts);
@@ -630,30 +630,30 @@ router.post('/api/projects/:id/cards', async (request, env: Env) => {
 });
 
 // Update a single card (name, quantity, sort_order)
-router.put('/api/projects/:id/cards/:cardId', async (request, env: Env) => {
+router.put('/api/decks/:id/cards/:cardId', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
-		const { id: projectId, cardId } = request.params;
+		const { id: deckId, cardId } = request.params;
 
-		// Verify project ownership
-		const project: any = await env.DB.prepare(
-			`SELECT id FROM projects WHERE id = ? AND user_id = ?`
-		).bind(projectId, user.user_id).first();
-		if (!project) return error(404, 'Project not found');
+		// Verify deck ownership
+		const deck: any = await env.DB.prepare(
+			`SELECT id FROM decks WHERE id = ? AND user_id = ?`
+		).bind(deckId, user.user_id).first();
+		if (!deck) return error(404, 'Deck not found');
 
 		const { card_name, quantity, sort_order } = await request.json() as any;
 
 		const result = await env.DB.prepare(
-			`UPDATE project_cards SET card_name = ?, quantity = ?, sort_order = ?
-			 WHERE id = ? AND project_id = ?`
-		).bind(card_name, quantity, sort_order, cardId, projectId).run();
+			`UPDATE deck_cards SET card_name = ?, quantity = ?, sort_order = ?
+			 WHERE id = ? AND deck_id = ?`
+		).bind(card_name, quantity, sort_order, cardId, deckId).run();
 
 		if (result.meta.changes === 0) return error(404, 'Card not found');
 
 		// Touch updated_at
-		await env.DB.prepare(`UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(projectId).run();
+		await env.DB.prepare(`UPDATE decks SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(deckId).run();
 
 		return json({ success: true, message: 'Card updated' });
 	} catch (e) {
@@ -663,27 +663,27 @@ router.put('/api/projects/:id/cards/:cardId', async (request, env: Env) => {
 });
 
 // Delete a single card
-router.delete('/api/projects/:id/cards/:cardId', async (request, env: Env) => {
+router.delete('/api/decks/:id/cards/:cardId', async (request, env: Env) => {
 	try {
 		const user = await requireAuth(request, env);
 		if (!user) return error(401, 'Not authenticated');
 
-		const { id: projectId, cardId } = request.params;
+		const { id: deckId, cardId } = request.params;
 
-		// Verify project ownership
-		const project: any = await env.DB.prepare(
-			`SELECT id FROM projects WHERE id = ? AND user_id = ?`
-		).bind(projectId, user.user_id).first();
-		if (!project) return error(404, 'Project not found');
+		// Verify deck ownership
+		const deck: any = await env.DB.prepare(
+			`SELECT id FROM decks WHERE id = ? AND user_id = ?`
+		).bind(deckId, user.user_id).first();
+		if (!deck) return error(404, 'Deck not found');
 
 		const result = await env.DB.prepare(
-			`DELETE FROM project_cards WHERE id = ? AND project_id = ?`
-		).bind(cardId, projectId).run();
+			`DELETE FROM deck_cards WHERE id = ? AND deck_id = ?`
+		).bind(cardId, deckId).run();
 
 		if (result.meta.changes === 0) return error(404, 'Card not found');
 
 		// Touch updated_at
-		await env.DB.prepare(`UPDATE projects SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(projectId).run();
+		await env.DB.prepare(`UPDATE decks SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(deckId).run();
 
 		return json({ success: true, message: 'Card deleted' });
 	} catch (e) {
@@ -691,6 +691,12 @@ router.delete('/api/projects/:id/cards/:cardId', async (request, env: Env) => {
 		return error(500, 'Internal Server Error');
 	}
 });
+
+// ──────────────────────────────────────────────
+// Share Links (Refactored)
+// ──────────────────────────────────────────────
+// Update existing handlers to use deck_id and decks table
+// ... these will be fully implemented in the next phase, but the schema assumes deck_id now.
 
 // Utility function to send an email and log it to D1
 async function sendEmailAndUpdateLog(env: Env, to: string, subject: string, html: string) {

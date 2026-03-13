@@ -7,7 +7,7 @@ export type PortableCard = {
 };
 
 export type PortableDeck = {
-  n: string; // project name
+  n: string; // deck name
   c: PortableCard[]; // cards
 };
 

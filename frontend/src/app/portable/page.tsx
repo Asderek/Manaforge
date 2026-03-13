@@ -58,8 +58,8 @@ function PortableViewer() {
         if (!deck || !user) return;
         setImporting(true);
         try {
-            // 1. Create a new project
-            const createRes = await fetch(`${apiUrl}/api/projects`, {
+            // 1. Create a new deck
+            const createRes = await fetch(`${apiUrl}/api/decks`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -69,12 +69,12 @@ function PortableViewer() {
                 })
             });
             const createData = await createRes.json();
-            if (!createData.success) throw new Error(createData.error || 'Failed to create project');
+            if (!createData.success) throw new Error(createData.error || 'Failed to create deck');
 
-            const projectId = createData.project.id;
+            const deckId = createData.deck.id;
 
             // 2. Add cards bulk
-            const cardsRes = await fetch(`${apiUrl}/api/projects/${projectId}/cards`, {
+            const cardsRes = await fetch(`${apiUrl}/api/decks/${deckId}/cards`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -86,7 +86,7 @@ function PortableViewer() {
             if (!cardsData.success) throw new Error(cardsData.error || 'Failed to import cards');
 
             addToast('Deck imported successfully!', 'success');
-            router.push(`/projects/${projectId}`);
+            router.push(`/decks/${deckId}`);
         } catch (err: any) {
             addToast(err.message || 'Error importing deck', 'error');
         } finally {
@@ -127,7 +127,7 @@ function PortableViewer() {
                             >
                                 {importing ? (
                                     <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
-                                ) : '📥'} {importing ? 'Importing...' : 'Import to My Projects'}
+                                ) : '📥'} {importing ? 'Importing...' : 'Import to My Decks'}
                             </button>
                         )}
 
@@ -148,7 +148,7 @@ function PortableViewer() {
                         </div>
                         {!user && (
                             <Link href="/" className="text-sm text-blue-600 hover:text-blue-700 font-medium transition-colors">
-                                Create Your Own Project →
+                                Create Your Own Deck →
                             </Link>
                         )}
                     </div>
@@ -190,7 +190,7 @@ function PortableViewer() {
                 {!user && (
                     <div className="mt-12 p-6 bg-blue-50 border border-blue-100 rounded-lg text-center">
                         <h3 className="text-blue-900 font-bold mb-2">Want to save this deck?</h3>
-                        <p className="text-blue-700 text-sm mb-4">Log in or create an account to import this list into your own projects.</p>
+                        <p className="text-blue-700 text-sm mb-4">Log in or create an account to import this list into your own collection.</p>
                         <Link href="/register" className="inline-block bg-blue-600 text-white px-6 py-2 rounded-md text-sm font-medium hover:bg-blue-700 transition-colors">
                             Get Started
                         </Link>

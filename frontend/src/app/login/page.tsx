@@ -32,7 +32,7 @@ export default function LoginPage() {
             }
 
             setStatus('success');
-            window.location.href = '/projects';
+            window.location.href = '/decks';
         } catch (err: any) {
             setErrorMessage(err.message || 'Invalid credentials.');
             setStatus('error');

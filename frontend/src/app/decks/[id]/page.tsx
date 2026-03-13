@@ -17,19 +17,19 @@ type Card = {
     custom_image?: string | null;
 };
 
-type Project = {
+type Deck = {
     id: string;
     name: string;
     description: string | null;
     cards: Card[];
 };
 
-export default function ProjectEditorPage() {
+export default function DeckEditorPage() {
     const params = useParams();
     const router = useRouter();
-    const projectId = params.id as string;
+    const deckId = params.id as string;
 
-    const [project, setProject] = useState<Project | null>(null);
+    const [deck, setDeck] = useState<Deck | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [saving, setSaving] = useState(false);
@@ -58,39 +58,39 @@ export default function ProjectEditorPage() {
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
 
-    const fetchProject = useCallback(async () => {
+    const fetchDeck = useCallback(async () => {
         try {
-            const res = await fetch(`${apiUrl}/api/projects/${projectId}`, { credentials: 'include' });
+            const res = await fetch(`${apiUrl}/api/decks/${deckId}`, { credentials: 'include' });
             const data = await res.json();
             if (data.success) {
-                setProject(data.project);
-                setNameValue(data.project.name);
+                setDeck(data.deck);
+                setNameValue(data.deck.name);
             } else {
-                setError(data.error || 'Failed to load project');
+                setError(data.error || 'Failed to load deck');
             }
         } catch (err: any) {
             setError(err.message);
         } finally {
             setLoading(false);
         }
-    }, [apiUrl, projectId]);
+    }, [apiUrl, deckId]);
 
-    useEffect(() => { fetchProject(); }, [fetchProject]);
+    useEffect(() => { fetchDeck(); }, [fetchDeck]);
 
-    // ── Project Name Editing ──
+    // ── Deck Name Editing ──
     const handleSaveName = async () => {
         if (!nameValue.trim()) return;
         setSaving(true);
         try {
-            const res = await fetch(`${apiUrl}/api/projects/${projectId}`, {
+            const res = await fetch(`${apiUrl}/api/decks/${deckId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ name: nameValue, description: project?.description })
+                body: JSON.stringify({ name: nameValue, description: deck?.description })
             });
             const data = await res.json();
             if (data.success) {
-                setProject(prev => prev ? { ...prev, name: nameValue } : prev);
+                setDeck(prev => prev ? { ...prev, name: nameValue } : prev);
                 setEditingName(false);
             }
         } catch (err: any) {
@@ -163,10 +163,10 @@ export default function ProjectEditorPage() {
             }
         }
 
-        setImportProgress('Saving to project...');
+        setImportProgress('Saving to deck...');
 
         try {
-            const res = await fetch(`${apiUrl}/api/projects/${projectId}/cards`, {
+            const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -177,7 +177,7 @@ export default function ProjectEditorPage() {
                 setShowImport(false);
                 setImportText('');
                 setImportProgress('');
-                fetchProject();
+                fetchDeck();
                 addToast(`${validatedCards.length} card(s) imported successfully!`, 'success');
                 // Show warnings as individual toasts
                 for (const w of warnings) {
@@ -198,7 +198,7 @@ export default function ProjectEditorPage() {
     const handleUpdateCard = async (card: Card, updates: Partial<Card>) => {
         const updated = { ...card, ...updates };
         try {
-            const res = await fetch(`${apiUrl}/api/projects/${projectId}/cards/${card.id}`, {
+            const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards/${card.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
@@ -206,7 +206,7 @@ export default function ProjectEditorPage() {
             });
             const data = await res.json();
             if (data.success) {
-                setProject(prev => {
+                setDeck(prev => {
                     if (!prev) return prev;
                     return {
                         ...prev,
@@ -221,13 +221,13 @@ export default function ProjectEditorPage() {
 
     const handleDeleteCard = async (cardId: string) => {
         try {
-            const res = await fetch(`${apiUrl}/api/projects/${projectId}/cards/${cardId}`, {
+            const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards/${cardId}`, {
                 method: 'DELETE',
                 credentials: 'include'
             });
             const data = await res.json();
             if (data.success) {
-                setProject(prev => {
+                setDeck(prev => {
                     if (!prev) return prev;
                     return { ...prev, cards: prev.cards.filter(c => c.id !== cardId) };
                 });
@@ -239,8 +239,8 @@ export default function ProjectEditorPage() {
 
     // ── Sort ──
     const handleMoveCard = async (card: Card, direction: 'up' | 'down') => {
-        if (!project) return;
-        const cards = [...project.cards];
+        if (!deck) return;
+        const cards = [...deck.cards];
         const idx = cards.findIndex(c => c.id === card.id);
         if (direction === 'up' && idx === 0) return;
         if (direction === 'down' && idx === cards.length - 1) return;
@@ -271,7 +271,7 @@ export default function ProjectEditorPage() {
 
         [cards[idx], cards[swapIdx]] = [cards[swapIdx], cards[idx]];
 
-        setProject(prev => prev ? { ...prev, cards } : prev);
+        setDeck(prev => prev ? { ...prev, cards } : prev);
 
         await Promise.all([
             handleUpdateCard(cards[idx], { sort_order: cards[idx].sort_order }),
@@ -311,20 +311,20 @@ export default function ProjectEditorPage() {
             const dataCustom = await resCustom.json();
             if (!dataCustom.success) throw new Error(dataCustom.error || 'Failed to save to gallery');
 
-            // 3. Add to current project decklist
-            const resProject = await fetch(`${apiUrl}/api/projects/${projectId}/cards`, {
+            // 3. Add to current deck decklist
+            const resDeck = await fetch(`${apiUrl}/api/decks/${deckId}/cards`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
                 body: JSON.stringify({ cards: [{ card_name: name, quantity: 1 }] })
             });
-            const dataProject = await resProject.json();
-            if (!dataProject.success) throw new Error(dataProject.error || 'Failed to add to project');
+            const dataDeck = await resDeck.json();
+            if (!dataDeck.success) throw new Error(dataDeck.error || 'Failed to add to deck');
 
             // 4. Success cleanup
             setShowCustomCardModal(false);
-            fetchProject();
-            addToast(`Custom card "${name}" created and added to project!`, 'success');
+            fetchDeck();
+            addToast(`Custom card "${name}" created and added to deck!`, 'success');
         } catch (err: any) {
             console.error('Custom card error:', err);
             addToast(err.message || 'Error creating custom card. (Pro-tip: Some sites block direct image access, try a different host)', 'error', 8000);
@@ -333,16 +333,16 @@ export default function ProjectEditorPage() {
         }
     };
 
-    const totalCards = project?.cards.reduce((sum, c) => sum + c.quantity, 0) ?? 0;
+    const totalCards = deck?.cards.reduce((sum, c) => sum + c.quantity, 0) ?? 0;
 
     const handleShare = () => {
-        if (!project) return;
+        if (!deck) return;
         
-        const hasCustomCards = project.cards.some(c => c.custom_image);
+        const hasCustomCards = deck.cards.some(c => c.custom_image);
         
         const portableDeck = {
-            n: project.name,
-            c: project.cards.map(c => ({
+            n: deck.name,
+            c: deck.cards.map(c => ({
                 n: c.card_name,
                 q: c.quantity,
                 // We strip the image here because Base64 images in URLs cause HTTP 431 (Header too large)
@@ -369,14 +369,14 @@ export default function ProjectEditorPage() {
         );
     }
 
-    if (error || !project) {
+    if (error || !deck) {
         return (
             <div className="min-h-screen flex flex-col justify-center items-center p-4">
                 <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded max-w-md">
-                    <p className="text-red-700">{error || 'Project not found'}</p>
+                    <p className="text-red-700">{error || 'Deck not found'}</p>
                 </div>
-                <Link href="/projects" className="mt-4 text-blue-600 hover:text-blue-500 font-medium">
-                    ← Back to Projects
+                <Link href="/decks" className="mt-4 text-blue-600 hover:text-blue-500 font-medium">
+                    ← Back to Decks
                 </Link>
             </div>
         );
@@ -388,8 +388,8 @@ export default function ProjectEditorPage() {
             <div className="bg-white border-b border-gray-200 px-8 py-4">
                 <div className="max-w-5xl mx-auto flex items-center justify-between">
                     <div className="flex items-center gap-4">
-                        <Link href="/projects" className="text-gray-500 hover:text-gray-700 transition-colors text-sm">
-                            ← Projects
+                        <Link href="/decks" className="text-gray-500 hover:text-gray-700 transition-colors text-sm">
+                            ← Decks
                         </Link>
                         {editingName ? (
                             <div className="flex items-center gap-2">
@@ -402,7 +402,7 @@ export default function ProjectEditorPage() {
                                     autoFocus
                                 />
                                 <button onClick={handleSaveName} disabled={saving} className="text-green-600 hover:text-green-700 text-sm font-medium">Save</button>
-                                <button onClick={() => { setEditingName(false); setNameValue(project.name); }} className="text-gray-500 hover:text-gray-700 text-sm">Cancel</button>
+                                <button onClick={() => { setEditingName(false); setNameValue(deck.name); }} className="text-gray-500 hover:text-gray-700 text-sm">Cancel</button>
                             </div>
                         ) : (
                             <h1
@@ -410,12 +410,12 @@ export default function ProjectEditorPage() {
                                 onClick={() => setEditingName(true)}
                                 title="Click to rename"
                             >
-                                {project.name}
+                                {deck.name}
                             </h1>
                         )}
                     </div>
                     <div className="flex items-center gap-4 text-sm text-gray-500">
-                        <span>{project.cards.length} unique · {totalCards} total</span>
+                        <span>{deck.cards.length} unique · {totalCards} total</span>
                     </div>
                 </div>
             </div>
@@ -429,7 +429,7 @@ export default function ProjectEditorPage() {
                     >
                         📋 Import Decklist
                     </button>
-                    {project.cards.length > 0 && (
+                    {deck.cards.length > 0 && (
                         <button
                             onClick={() => setShowProxySheet(true)}
                             className="bg-purple-600 hover:bg-purple-700 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
@@ -446,7 +446,7 @@ export default function ProjectEditorPage() {
                     <button
                         onClick={handleShare}
                         className="bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
-                        disabled={!project || project.cards.length === 0}
+                        disabled={!deck || deck.cards.length === 0}
                     >
                         🔗 Share Portable Link
                     </button>
@@ -484,10 +484,10 @@ export default function ProjectEditorPage() {
                 )}
 
                 {/* Card List */}
-                {project.cards.length === 0 ? (
+                {deck.cards.length === 0 ? (
                     <div className="bg-blue-50/60 rounded-lg shadow-sm border border-blue-100 p-12 text-center">
                         <h2 className="text-xl font-semibold text-gray-700 mb-2">No cards yet</h2>
-                        <p className="text-gray-500 mb-6">Import a decklist to add cards to this project.</p>
+                        <p className="text-gray-500 mb-6">Import a decklist to add cards to this deck.</p>
                         <button
                             onClick={() => setShowImport(true)}
                             className="bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-md text-sm px-6 py-2.5 transition-colors"
@@ -510,13 +510,13 @@ export default function ProjectEditorPage() {
                                     </tr>
                                 </thead>
                                 <tbody className="bg-white divide-y divide-gray-100">
-                                    {project.cards.map((card, idx) => (
+                                    {deck.cards.map((card, idx) => (
                                         <CardRow
                                             key={card.id}
                                             card={card}
                                             index={idx}
                                             isFirst={idx === 0}
-                                            isLast={idx === project.cards.length - 1}
+                                            isLast={idx === deck.cards.length - 1}
                                             onUpdate={handleUpdateCard}
                                             onDelete={handleDeleteCard}
                                             onMove={handleMoveCard}
@@ -529,7 +529,7 @@ export default function ProjectEditorPage() {
                             </table>
                         ) : (
                             <GridView
-                                cards={project.cards}
+                                cards={deck.cards}
                                 onUpdate={handleUpdateCard}
                                 onDelete={handleDeleteCard}
                                 scryfallCache={scryfallCache}
@@ -542,7 +542,7 @@ export default function ProjectEditorPage() {
             {/* Proxy Preview Sheet */}
             {showProxySheet && (
                 <ProxySheet
-                    cards={project.cards}
+                    cards={deck.cards}
                     scryfallCache={scryfallCache.current}
                     onClose={() => setShowProxySheet(false)}
                 />
