@@ -2,6 +2,14 @@ import { AutoRouter, cors, json, error, IRequest } from 'itty-router';
 import * as cookie from 'cookie';
 import { Resend } from 'resend';
 
+export enum MatchStatus {
+	TABLE_PENDING = 'TABLE_PENDING',
+	AWAITING_MATCH = 'AWAITING_MATCH',
+	ON_GOING = 'ON_GOING',
+	COMPLETE = 'COMPLETE',
+	CANCELED = 'CANCELED'
+}
+
 export interface Env {
 	DB: D1Database;
 	RECAPTCHA_SECRET_KEY: string;
@@ -935,7 +943,7 @@ router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, e
 			const activeMatch = await env.DB.prepare(
 				`SELECT * FROM matches 
 				 WHERE tournament_id = ? 
-				 AND status != 'completed' 
+				 AND status != 'COMPLETE' AND status != 'CANCELED' 
 				 AND (p1_id = ? OR p2_id = ?)
 				 ORDER BY round_number DESC
 				 LIMIT 1`
@@ -946,9 +954,9 @@ router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, e
 				statements.push(
 					env.DB.prepare(
 						`UPDATE matches 
-						 SET p1_score = ?, p2_score = ?, draws = 0, status = 'completed' 
+						 SET p1_score = ?, p2_score = ?, draws = 0, status = ? 
 						 WHERE id = ?`
-					).bind(isP1 ? 0 : 2, isP1 ? 2 : 0, activeMatch.id)
+					).bind(isP1 ? 0 : 2, isP1 ? 2 : 0, MatchStatus.COMPLETE, activeMatch.id)
 				);
 				
 				// Standings refresh helper
@@ -956,15 +964,15 @@ router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, e
 					return env.DB.prepare(`
 						UPDATE tournament_registrations
 						SET 
-							wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
-							draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
-							losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
+							wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
+							draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
+							losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
 							points = (
 								SELECT 
 									(COUNT(CASE WHEN (p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score) THEN 1 END) * 3) +
 									(COUNT(CASE WHEN (p1_id = ? OR p2_id = ?) AND p1_score = p2_score THEN 1 END) * 1)
 								FROM matches
-								WHERE tournament_id = ? AND status = 'completed'
+								WHERE tournament_id = ? AND status = 'COMPLETE'
 							)
 						WHERE tournament_id = ? AND player_id = ?
 					`).bind(
@@ -1050,7 +1058,6 @@ router.post('/api/tournaments/:id/pairings', async (request, env: Env) => {
 
 		// 4. Create matches
 		const matches = [];
-		let tableNumber = 1;
 		for (let i = 0; i < playerIds.length; i += 2) {
 			const p1 = playerIds[i];
 			const p2 = playerIds[i + 1] || 'tobias-boon'; // Tobias Boon handles the bye
@@ -1061,8 +1068,8 @@ router.post('/api/tournaments/:id/pairings', async (request, env: Env) => {
 				round_number: roundNumber,
 				p1_id: p1,
 				p2_id: p2,
-				table_number: tableNumber++,
-				status: 'pending'
+				table_number: null,
+				status: MatchStatus.TABLE_PENDING
 			});
 		}
 
@@ -1100,10 +1107,10 @@ router.post('/api/tournaments/:id/matches', async (request, env: Env) => {
 		const id = crypto.randomUUID();
 		await env.DB.prepare(
 			`INSERT INTO matches (id, tournament_id, round_number, p1_id, p2_id, table_number, status)
-			 VALUES (?, ?, ?, ?, ?, ?, 'pending')`
-		).bind(id, tournamentId, round_number, p1_id, p2_id, table_number || null).run();
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`
+		).bind(id, tournamentId, round_number, p1_id, p2_id, table_number || null, MatchStatus.TABLE_PENDING).run();
 
-		return json({ success: true, match: { id, tournament_id: tournamentId, round_number, p1_id, p2_id, table_number, status: 'pending' } });
+		return json({ success: true, match: { id, tournament_id: tournamentId, round_number, p1_id, p2_id, table_number, status: MatchStatus.TABLE_PENDING } });
 	} catch (e: any) {
 		return error(500, e.message);
 	}
@@ -1117,28 +1124,28 @@ router.put('/api/tournaments/:tournamentId/matches/:id', async (request, env: En
 	try {
 		const { p1_score, p2_score, draws, status, table_number, scheduled_at } = await request.json() as any;
 		
-		// 1. Get original match to find player IDs
+		// 1. Get original match
 		const match = await env.DB.prepare(
-			`SELECT p1_id, p2_id FROM matches WHERE id = ?`
+			`SELECT * FROM matches WHERE id = ?`
 		).bind(id).first() as any;
 
 		if (!match) return error(404, 'Match not found');
 
 		const statements = [];
 
-		// 2. Update the match
+		// 2. Update the match (preserving existing values if not provided)
 		statements.push(
 			env.DB.prepare(
 				`UPDATE matches 
 				 SET p1_score = ?, p2_score = ?, draws = ?, status = ?, table_number = ?, scheduled_at = ? 
 				 WHERE id = ?`
 			).bind(
-				p1_score || 0,
-				p2_score || 0,
-				draws || 0,
-				status || 'pending',
-				table_number || null,
-				scheduled_at || null,
+				p1_score !== undefined ? p1_score : (match.p1_score || 0),
+				p2_score !== undefined ? p2_score : (match.p2_score || 0),
+				draws !== undefined ? draws : (match.draws || 0),
+				status !== undefined ? status : (match.status || MatchStatus.TABLE_PENDING),
+				table_number !== undefined ? table_number : (match.table_number || null),
+				scheduled_at !== undefined ? scheduled_at : (match.scheduled_at || null),
 				id
 			)
 		);
@@ -1149,15 +1156,15 @@ router.put('/api/tournaments/:tournamentId/matches/:id', async (request, env: En
 			return env.DB.prepare(`
 				UPDATE tournament_registrations
 				SET 
-					wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
-					draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
-					losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
+					wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
+					draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
+					losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
 					points = (
 						SELECT 
 							(COUNT(CASE WHEN (p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score) THEN 1 END) * 3) +
 							(COUNT(CASE WHEN (p1_id = ? OR p2_id = ?) AND p1_score = p2_score THEN 1 END) * 1)
 						FROM matches
-						WHERE tournament_id = ? AND status = 'completed'
+						WHERE tournament_id = ? AND status = 'COMPLETE'
 					)
 				WHERE tournament_id = ? AND player_id = ?
 			`).bind(

@@ -4,6 +4,14 @@ import React, { useState, useEffect, use } from 'react';
 import Link from 'next/link';
 import { useToast } from '../../../components/Toast';
 
+enum MatchStatus {
+    TABLE_PENDING = 'TABLE_PENDING',
+    AWAITING_MATCH = 'AWAITING_MATCH',
+    ON_GOING = 'ON_GOING',
+    COMPLETE = 'COMPLETE',
+    CANCELED = 'CANCELED'
+}
+
 type Player = { id: string; name: string };
 type Tournament = {
     id: string;
@@ -36,8 +44,8 @@ type Match = {
     p1_score: number;
     p2_score: number;
     draws: number;
-    status: string;
-    table_number: number;
+    status: MatchStatus;
+    table_number: number | null;
     scheduled_at: string | null;
 };
 
@@ -64,6 +72,14 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
     const [pendingForfeitId, setPendingForfeitId] = useState<string | null>(null);
     const [pendingSaveResultId, setPendingSaveResultId] = useState<string | null>(null);
     const [pendingGenerateRound, setPendingGenerateRound] = useState(false);
+    
+    // Manual Match State
+    const [showManualMatchModal, setShowManualMatchModal] = useState(false);
+    const [p1ManualMatch, setP1ManualMatch] = useState<string>('');
+    const [p2ManualMatch, setP2ManualMatch] = useState<string>('');
+    const [isCreatingManualMatch, setIsCreatingManualMatch] = useState(false);
+    const [showTimelineModal, setShowTimelineModal] = useState(false);
+
     const { addToast } = useToast();
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
@@ -219,6 +235,26 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         return slots;
     };
 
+    const getTimelineData = () => {
+        if (!tournament) return [];
+        const slots = getTimeSlots();
+        const days: { date: string, formattedDate: string, slots: typeof slots }[] = [];
+        
+        slots.forEach(slot => {
+            const dateObj = new Date(slot.start);
+            const dateStr = dateObj.toISOString().split('T')[0];
+            const formattedDate = dateObj.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
+            
+            let day = days.find(d => d.date === dateStr);
+            if (!day) {
+                day = { date: dateStr, formattedDate, slots: [] };
+                days.push(day);
+            }
+            day.slots.push(slot);
+        });
+        return days;
+    };
+
     const handleAssignMatch = async (matchId: string, table: number, slot: string) => {
         try {
             const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/matches/${matchId}`, {
@@ -227,7 +263,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                 body: JSON.stringify({
                     table_number: table,
                     scheduled_at: slot,
-                    status: 'ongoing'
+                    status: MatchStatus.AWAITING_MATCH
                 }),
                 credentials: 'include'
             });
@@ -237,6 +273,57 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
             }
         } catch (err) {
             addToast('Failed to assign match', 'error');
+        }
+    };
+
+    const handleRescheduleMatch = async (matchId: string, newSlot: string) => {
+        const match = matches.find(m => m.id === matchId);
+        if (!match || !tournament) return;
+
+        // Constraint: Only Allow dragging if match.status === MatchStatus.AWAITING_MATCH
+        if (match.status !== MatchStatus.AWAITING_MATCH) {
+            addToast('Only matches awaiting start can be rescheduled', 'warning');
+            return;
+        }
+
+        // Find available table in target slot
+        const matchesInTargetSlot = matches.filter(m => m.scheduled_at === newSlot && m.status !== MatchStatus.CANCELED);
+        
+        let targetTable: number | null = match.table_number;
+        const isOriginalTableTaken = matchesInTargetSlot.some(m => m.table_number === targetTable);
+
+        if (isOriginalTableTaken) {
+            // Find next available table
+            targetTable = null;
+            for (let i = 1; i <= tournament.num_tables; i++) {
+                if (!matchesInTargetSlot.some(m => m.table_number === i)) {
+                    targetTable = i;
+                    break;
+                }
+            }
+        }
+
+        if (!targetTable) {
+            addToast('No tables available in this time slot', 'error');
+            return;
+        }
+
+        try {
+            const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/matches/${matchId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    table_number: targetTable,
+                    scheduled_at: newSlot
+                }),
+                credentials: 'include'
+            });
+            if (res.ok) {
+                addToast(`Match rescheduled to Table ${targetTable}`, 'success');
+                loadData();
+            }
+        } catch (err) {
+            addToast('Failed to reschedule match', 'error');
         }
     };
 
@@ -256,7 +343,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                     p1_score: scores.p1,
                     p2_score: scores.p2,
                     draws: scores.draws,
-                    status: 'completed'
+                    status: MatchStatus.COMPLETE
                 }),
                 credentials: 'include'
             });
@@ -264,11 +351,79 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                 addToast('Results saved!', 'success');
                 setResultEditMatch(null);
                 setPendingSaveResultId(null);
+                setScores({ p1: 0, p2: 0, draws: 0 });
                 loadData();
             }
         } catch (err) {
             addToast('Failed to save results', 'error');
             setPendingSaveResultId(null);
+        }
+    };
+
+    const handleStartMatch = async (matchId: string) => {
+        try {
+            const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/matches/${matchId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: MatchStatus.ON_GOING }),
+                credentials: 'include'
+            });
+            const data = await res.json();
+            if (data.success) {
+                addToast('Match started!', 'success');
+                loadData();
+            }
+        } catch (err) {
+            addToast('Error starting match', 'error');
+        }
+    };
+
+    const handleSelectMatchForResults = (match: Match) => {
+        setResultEditMatch(match);
+        setScores({
+            p1: match.p1_score || 0,
+            p2: match.p2_score || 0,
+            draws: match.draws || 0
+        });
+    };
+
+    const handleCreateManualMatch = async () => {
+        if (!p1ManualMatch || !p2ManualMatch) {
+            addToast('Please select both players', 'warning');
+            return;
+        }
+        if (p1ManualMatch === p2ManualMatch) {
+            addToast('Cannot pair a player against themselves', 'error');
+            return;
+        }
+
+        setIsCreatingManualMatch(true);
+        try {
+            const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/matches`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    round_number: tournament?.current_round || 1,
+                    p1_id: p1ManualMatch,
+                    p2_id: p2ManualMatch,
+                    status: MatchStatus.TABLE_PENDING
+                }),
+                credentials: 'include'
+            });
+            const data = await res.json();
+            if (data.success) {
+                addToast('Manual match created', 'success');
+                setShowManualMatchModal(false);
+                setP1ManualMatch('');
+                setP2ManualMatch('');
+                loadData();
+            } else {
+                addToast(data.message || 'Error creating match', 'error');
+            }
+        } catch (err) {
+            addToast('Network error', 'error');
+        } finally {
+            setIsCreatingManualMatch(false);
         }
     };
 
@@ -337,16 +492,26 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                         <button 
                             onClick={handleGenerateRounds}
-                            disabled={isGenerating || (registrations.length < 2) || (matches.length > 0 && tournament?.status === 'draft')}
-                            className={`p-4 rounded-xl font-bold transition-all shadow-sm disabled:bg-gray-100 disabled:text-gray-400 disabled:shadow-none flex flex-col items-center justify-center gap-2 group ${
+                            disabled={
+                                isGenerating || 
+                                (registrations.length < 2) || 
+                                (matches.length > 0 && tournament?.status === 'draft') ||
+                                matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED)
+                            }
+                            className={`p-4 rounded-xl font-bold transition-all shadow-sm disabled:bg-gray-100 disabled:shadow-none flex flex-col items-center justify-center gap-2 group ${
                                 pendingGenerateRound 
                                 ? 'bg-red-600 text-white scale-105 shadow-red-100' 
+                                : matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED)
+                                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
                                 : 'bg-blue-600 text-white hover:bg-blue-700'
                             }`}
                         >
-                            <span className="text-2xl group-hover:scale-110 transition-transform">{pendingGenerateRound ? '🎯' : '🎲'}</span>
+                            <span className="text-2xl group-hover:scale-110 transition-transform">
+                                {matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED) ? '⏳' : pendingGenerateRound ? '🎯' : '🎲'}
+                            </span>
                             <span>
                                 {isGenerating ? 'Starting...' : 
+                                 matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED) ? 'Round in Progress' :
                                  pendingGenerateRound ? 'Confirm?' : 
                                  `Start Round ${(tournament?.current_round || 0) + 1}`}
                             </span>
@@ -378,9 +543,12 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                             <span>Set Results</span>
                         </button>
                         
-                        <button disabled className="bg-gray-50 border border-gray-100 text-gray-300 p-4 rounded-xl font-bold cursor-not-allowed flex flex-col items-center justify-center gap-2">
-                            <span className="text-2xl grayscale opacity-50">⚙️</span>
-                            <span>Placeholder</span>
+                        <button 
+                            onClick={() => setShowTimelineModal(true)}
+                            className="bg-indigo-600 text-white p-4 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
+                        >
+                            <span className="text-2xl group-hover:scale-110 transition-transform">📅</span>
+                            <span>See Timeline</span>
                         </button>
                     </div>
                 </div>
@@ -447,7 +615,28 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                         </table>
                     </div>
                 ) : (
-                    <div className="space-y-4">
+                    <div className="space-y-6">
+                        {/* Manual Pairing Control */}
+                        <div className="flex items-center justify-between bg-gray-50/50 p-4 rounded-xl border border-dashed border-gray-200">
+                            <div className="flex items-center gap-3">
+                                <span className="text-xl">🎲</span>
+                                <div>
+                                    <p className="text-xs font-black text-gray-900 leading-none">Manual Pairing</p>
+                                    <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Override or add matches</p>
+                                </div>
+                            </div>
+                            <button 
+                                onClick={() => {
+                                    setP1ManualMatch('');
+                                    setP2ManualMatch('');
+                                    setShowManualMatchModal(true);
+                                }}
+                                className="bg-white border border-gray-200 px-4 py-2 rounded-lg text-xs font-black text-blue-600 hover:border-blue-300 hover:bg-blue-50 transition-all shadow-sm active:scale-95"
+                            >
+                                Create New Match
+                            </button>
+                        </div>
+
                         {matches.length === 0 ? (
                             <div className="bg-white border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
                                 <p className="text-gray-500 mb-4">No matches recorded yet.</p>
@@ -483,9 +672,23 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-4">
-                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${match.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700 animate-pulse'}`}>
-                                                {match.status}
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                                match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' : 
+                                                match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700 animate-pulse' :
+                                                match.status === MatchStatus.AWAITING_MATCH ? 'bg-orange-100 text-orange-700' :
+                                                match.status === MatchStatus.CANCELED ? 'bg-red-100 text-red-700' :
+                                                'bg-gray-100 text-gray-500'
+                                            }`}>
+                                                {match.status.replace('_', ' ')}
                                             </span>
+                                            {match.status === MatchStatus.AWAITING_MATCH && (
+                                                <button 
+                                                    onClick={() => handleStartMatch(match.id)}
+                                                    className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-green-700 transition-colors"
+                                                >
+                                                    Start Match
+                                                </button>
+                                            )}
                                             <button className="text-blue-600 font-bold text-sm hover:underline">Edit</button>
                                         </div>
                                     </div>
@@ -562,6 +765,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                     setShowMapModal(false);
                                     setSelectedTable(null);
                                     setResultEditMatch(null);
+                                    setScores({ p1: 0, p2: 0, draws: 0 });
                                 }} 
                                 className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-all shadow-sm"
                             >
@@ -611,12 +815,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                         if (!assignedMatch) setSelectedTable(tableNum);
                                                     } else {
                                                         if (assignedMatch) {
-                                                            setResultEditMatch(assignedMatch);
-                                                            setScores({
-                                                                p1: assignedMatch.p1_score || 0,
-                                                                p2: assignedMatch.p2_score || 0,
-                                                                draws: assignedMatch.draws || 0
-                                                            });
+                                                            handleSelectMatchForResults(assignedMatch);
                                                         }
                                                     }
                                                 }}
@@ -641,7 +840,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                         <div className={`absolute -top-2 -right-2 text-white text-[10px] w-6 h-6 rounded-lg flex items-center justify-center font-bold shadow-lg ${modalMode === 'results' ? 'bg-purple-600' : 'bg-blue-600'}`}>
                                                             {tableNum}
                                                         </div>
-                                                        {assignedMatch.status === 'completed' && (
+                                                        {assignedMatch.status === MatchStatus.COMPLETE && (
                                                             <div className="absolute top-1 left-1 w-4 h-4 bg-green-500 rounded-full flex items-center justify-center text-[8px] text-white shadow-sm ring-2 ring-white">✓</div>
                                                         )}
                                                     </>
@@ -673,7 +872,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         </div>
                                         <div className="flex-1 overflow-y-auto p-4 space-y-3">
                                             {matches
-                                                .filter(m => !m.scheduled_at && m.status === 'pending')
+                                                .filter(m => !m.scheduled_at && m.status === MatchStatus.TABLE_PENDING)
                                                 .map(match => (
                                                     <button
                                                         key={match.id}
@@ -700,14 +899,14 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                         </div>
                                                     </button>
                                                 ))}
-                                            {matches.filter(m => !m.scheduled_at).length === 0 && (
+                                            {matches.filter(m => !m.scheduled_at && m.status === MatchStatus.TABLE_PENDING).length === 0 && (
                                                 <div className="text-center py-12 opacity-40 italic flex flex-col items-center">
                                                     <span className="text-3xl mb-2">✨</span>
                                                     <p className="text-xs">All matches assigned!</p>
                                                 </div>
                                             )}
                                         </div>
-                                        {!selectedTable && matches.filter(m => !m.scheduled_at).length > 0 && (
+                                        {!selectedTable && matches.filter(m => !m.scheduled_at && m.status === MatchStatus.TABLE_PENDING).length > 0 && (
                                             <div className="p-4 bg-blue-50 border-t border-blue-100">
                                                 <p className="text-[10px] text-blue-700 font-bold text-center leading-tight">
                                                     💡 Select a table on the map <br/> to assign a match
@@ -716,78 +915,141 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         )}
                                     </>
                                 ) : (
-                                    <>
-                                        <div className="p-6 border-b border-gray-200 bg-white">
-                                            <h4 className="text-sm font-black text-gray-900 mb-1">Set Match Results</h4>
-                                            <p className="text-[10px] text-gray-500 uppercase tracking-tighter">Table {resultEditMatch?.table_number || '?'}</p>
-                                        </div>
-                                        <div className="flex-1 overflow-y-auto p-6 space-y-6 bg-white/50">
-                                            {resultEditMatch ? (
-                                                <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
-                                                    <div className="space-y-4">
-                                                        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                                                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">{resultEditMatch.p1_name} Wins</label>
-                                                            <div className="flex items-center gap-4">
-                                                                <button onClick={() => setScores({...scores, p1: Math.max(0, scores.p1 - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
-                                                                <input 
-                                                                    type="number" 
-                                                                    value={scores.p1}
-                                                                    onChange={e => setScores({...scores, p1: parseInt(e.target.value) || 0})}
-                                                                    className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
-                                                                />
-                                                                <button onClick={() => setScores({...scores, p1: scores.p1 + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
-                                                            </div>
-                                                        </div>
-                                                        
-                                                        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                                                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">{resultEditMatch.p2_name} Wins</label>
-                                                            <div className="flex items-center gap-4">
-                                                                <button onClick={() => setScores({...scores, p2: Math.max(0, scores.p2 - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
-                                                                <input 
-                                                                    type="number" 
-                                                                    value={scores.p2}
-                                                                    onChange={e => setScores({...scores, p2: parseInt(e.target.value) || 0})}
-                                                                    className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
-                                                                />
-                                                                <button onClick={() => setScores({...scores, p2: scores.p2 + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
-                                                            </div>
-                                                        </div>
-
-                                                        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
-                                                            <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">Draws</label>
-                                                            <div className="flex items-center gap-4">
-                                                                <button onClick={() => setScores({...scores, draws: Math.max(0, scores.draws - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
-                                                                <input 
-                                                                    type="number" 
-                                                                    value={scores.draws}
-                                                                    onChange={e => setScores({...scores, draws: parseInt(e.target.value) || 0})}
-                                                                    className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
-                                                                />
-                                                                <button onClick={() => setScores({...scores, draws: scores.draws + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-
-                                                    <button 
-                                                        onClick={handleSaveResults}
-                                                        className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${
-                                                            pendingSaveResultId === resultEditMatch.id 
-                                                            ? 'bg-red-600 text-white shadow-red-100 scale-105' 
-                                                            : 'bg-purple-600 text-white shadow-purple-100 hover:bg-purple-700'
-                                                        }`}
-                                                    >
-                                                        <span>{pendingSaveResultId === resultEditMatch.id ? '🎯' : '💾'}</span>
-                                                        <span>{pendingSaveResultId === resultEditMatch.id ? 'Confirm?' : 'Save Results'}</span>
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <div className="h-full flex flex-col items-center justify-center text-center opacity-30 px-6 py-20">
-                                                    <span className="text-4xl mb-4">🎯</span>
-                                                    <p className="text-xs font-bold leading-tight uppercase tracking-tighter">Pick a table with an active match <br/> to set results</p>
-                                                </div>
+                                    <div className="h-full flex flex-col overflow-hidden">
+                                        {/* Header */}
+                                        <div className="p-6 border-b border-gray-200 bg-white flex items-center gap-4">
+                                            {resultEditMatch && (
+                                                <button 
+                                                    onClick={() => {
+                                                        setResultEditMatch(null);
+                                                        setScores({ p1: 0, p2: 0, draws: 0 });
+                                                    }}
+                                                    className="w-8 h-8 rounded-full border border-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-900 hover:border-gray-300 transition-all active:scale-95"
+                                                >
+                                                    <span className="text-sm font-bold">←</span>
+                                                </button>
                                             )}
+                                            <div>
+                                                <h4 className="text-sm font-black text-gray-900 mb-0.5">
+                                                    {resultEditMatch ? 'Set Match Results' : 'Active Matches'}
+                                                </h4>
+                                                <p className="text-[10px] text-gray-500 uppercase tracking-tighter">
+                                                    {resultEditMatch ? `Table ${resultEditMatch.table_number}` : `${matches.filter(m => m.status === MatchStatus.ON_GOING).length} matches ongoing`}
+                                                </p>
+                                            </div>
                                         </div>
-                                    </>
+
+                                        {/* Sliding Viewport */}
+                                        <div className="flex-1 relative overflow-hidden">
+                                            <div 
+                                                className={`flex w-[200%] h-full transition-transform duration-500 cubic-bezier(0.4, 0, 0.2, 1) ${resultEditMatch ? '-translate-x-1/2' : 'translate-x-0'}`}
+                                            >
+                                                {/* List View (Slide 1) */}
+                                                <div className="w-1/2 h-full overflow-y-auto p-6 space-y-4 bg-white/50">
+                                                    <h5 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Ongoing Matches</h5>
+                                                    <div className="space-y-3">
+                                                        {matches.filter(m => m.scheduled_at && m.status === MatchStatus.ON_GOING).map(match => (
+                                                            <div 
+                                                                key={match.id}
+                                                                onClick={() => handleSelectMatchForResults(match)}
+                                                                className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                                                                    resultEditMatch?.id === match.id 
+                                                                    ? 'border-blue-600 bg-blue-50 shadow-md' 
+                                                                    : 'border-gray-100 hover:border-blue-200 bg-white hover:shadow-sm'
+                                                                }`}
+                                                            >
+                                                                <div className="flex items-center justify-between mb-2">
+                                                                    <span className="text-[10px] font-bold text-blue-600 px-2 py-0.5 bg-blue-50 rounded italic">Table {match.table_number}</span>
+                                                                    <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-blue-100 text-blue-700 animate-pulse">
+                                                                        Ongoing
+                                                                    </span>
+                                                                </div>
+                                                                <div className="space-y-1">
+                                                                    <p className="text-xs font-black text-gray-800">{match.p1_name}</p>
+                                                                    <div className="h-px bg-gray-50 w-full" />
+                                                                    <p className="text-xs font-black text-gray-800">{match.p2_name}</p>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                        {matches.filter(m => m.scheduled_at && m.status === MatchStatus.ON_GOING).length === 0 && (
+                                                            <div className="text-center py-12 opacity-40 italic flex flex-col items-center">
+                                                                <span className="text-4xl mb-2">😴</span>
+                                                                <p className="text-xs font-bold uppercase tracking-tighter">No active matches to score.</p>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+
+                                                {/* Scoring View (Slide 2) */}
+                                                <div className="w-1/2 h-full overflow-y-auto p-6 bg-white">
+                                                    {resultEditMatch ? (
+                                                        <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
+                                                            <div className="space-y-4">
+                                                                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                                                    <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">{resultEditMatch.p1_name} Wins</label>
+                                                                    <div className="flex items-center gap-4">
+                                                                        <button onClick={() => setScores({...scores, p1: Math.max(0, scores.p1 - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
+                                                                        <input 
+                                                                            type="number" 
+                                                                            value={scores.p1}
+                                                                            onChange={e => setScores({...scores, p1: parseInt(e.target.value) || 0})}
+                                                                            className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
+                                                                        />
+                                                                        <button onClick={() => setScores({...scores, p1: scores.p1 + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
+                                                                    </div>
+                                                                </div>
+                                                                
+                                                                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                                                    <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">{resultEditMatch.p2_name} Wins</label>
+                                                                    <div className="flex items-center gap-4">
+                                                                        <button onClick={() => setScores({...scores, p2: Math.max(0, scores.p2 - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
+                                                                        <input 
+                                                                            type="number" 
+                                                                            value={scores.p2}
+                                                                            onChange={e => setScores({...scores, p2: parseInt(e.target.value) || 0})}
+                                                                            className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
+                                                                        />
+                                                                        <button onClick={() => setScores({...scores, p2: scores.p2 + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
+                                                                    <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">Draws</label>
+                                                                    <div className="flex items-center gap-4">
+                                                                        <button onClick={() => setScores({...scores, draws: Math.max(0, scores.draws - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
+                                                                        <input 
+                                                                            type="number" 
+                                                                            value={scores.draws}
+                                                                            onChange={e => setScores({...scores, draws: parseInt(e.target.value) || 0})}
+                                                                            className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
+                                                                        />
+                                                                        <button onClick={() => setScores({...scores, draws: scores.draws + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+
+                                                            <button 
+                                                                onClick={handleSaveResults}
+                                                                className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${
+                                                                    pendingSaveResultId === resultEditMatch.id 
+                                                                    ? 'bg-red-600 text-white shadow-red-100 scale-105' 
+                                                                    : 'bg-purple-600 text-white shadow-purple-100 hover:bg-purple-700'
+                                                                }`}
+                                                            >
+                                                                <span>{pendingSaveResultId === resultEditMatch.id ? '🎯' : '💾'}</span>
+                                                                <span>{pendingSaveResultId === resultEditMatch.id ? 'Confirm?' : 'Save Results'}</span>
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="h-full flex flex-col items-center justify-center text-center opacity-30 px-6 py-20">
+                                                            <span className="text-4xl mb-4">🎯</span>
+                                                            <p className="text-xs font-bold leading-tight uppercase tracking-tighter">Select a match to <br/> record results</p>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
                                 )}
                             </div>
                         </div>
@@ -796,6 +1058,200 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
             )}
 
 
+            {/* Manual Match Modal */}
+            {showManualMatchModal && (
+                <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-[60]">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                            <div>
+                                <h3 className="text-lg font-black text-gray-900">Manual Match Creation</h3>
+                                <p className="text-[10px] text-gray-400 uppercase tracking-widest leading-none mt-1">Round {tournament?.current_round || 1}</p>
+                            </div>
+                            <button onClick={() => setShowManualMatchModal(false)} className="text-gray-400 hover:text-gray-600 font-bold">Close</button>
+                        </div>
+                        <div className="p-6 space-y-6">
+                            <div className="space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Player 1</label>
+                                    <select 
+                                        value={p1ManualMatch}
+                                        onChange={e => setP1ManualMatch(e.target.value)}
+                                        className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                    >
+                                        <option value="">Select a player...</option>
+                                        {registrations.filter(r => r.id !== p2ManualMatch && !r.dropped).map(reg => (
+                                            <option key={reg.id} value={reg.id}>{reg.player_name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="flex justify-center">
+                                    <div className="w-8 h-8 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center">
+                                        <span className="text-xs font-bold text-blue-600">VS</span>
+                                    </div>
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Player 2</label>
+                                    <select 
+                                        value={p2ManualMatch}
+                                        onChange={e => setP2ManualMatch(e.target.value)}
+                                        className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+                                    >
+                                        <option value="">Select a player...</option>
+                                        {registrations.filter(r => r.id !== p1ManualMatch && !r.dropped).map(reg => (
+                                            <option key={reg.id} value={reg.id}>{reg.player_name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={handleCreateManualMatch}
+                                disabled={isCreatingManualMatch || !p1ManualMatch || !p2ManualMatch}
+                                className={`w-full py-4 rounded-xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${
+                                    isCreatingManualMatch ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-blue-100 hover:bg-blue-700'
+                                }`}
+                            >
+                                {isCreatingManualMatch ? 'Creating...' : 'Create Match'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showTimelineModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-8 z-[70]">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-7xl h-[90vh] overflow-hidden flex flex-col">
+                        <div className="px-8 py-6 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                            <div>
+                                <h3 className="text-2xl font-black text-gray-900">Tournament Timeline</h3>
+                                <p className="text-sm text-gray-500">Visualization of all matches by day and time segment</p>
+                            </div>
+                            <button 
+                                onClick={() => setShowTimelineModal(false)} 
+                                className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-all shadow-sm"
+                            >
+                                ✕
+                            </button>
+                        </div>
+
+                        <div className="flex-1 overflow-auto p-8 bg-gray-50/30">
+                            <div className="space-y-12">
+                                {getTimelineData().map(day => (
+                                    <div key={day.date} className="relative">
+                                        <h4 className="flex items-center gap-4 mb-6">
+                                            <span className="text-lg font-black text-gray-900">{day.formattedDate}</span>
+                                            <div className="h-px flex-1 bg-gray-200" />
+                                        </h4>
+                                        
+                                        <div className="flex gap-4 min-w-max pb-4">
+                                            {day.slots.map(slot => {
+                                                const slotMatches = matches.filter(m => m.scheduled_at === slot.start && m.status !== MatchStatus.CANCELED);
+                                                return (
+                                                    <div 
+                                                        key={slot.start} 
+                                                        className="w-80 flex-shrink-0 group/slot transition-all duration-200 rounded-2xl"
+                                                        onDragOver={(e) => {
+                                                            e.preventDefault();
+                                                            e.currentTarget.classList.add('bg-indigo-100/80');
+                                                            const inner = e.currentTarget.querySelector('.timeline-slot-inner');
+                                                            if (inner) {
+                                                                inner.classList.remove('border-gray-200');
+                                                                inner.classList.add('border-indigo-500', 'bg-white');
+                                                            }
+                                                        }}
+                                                        onDragLeave={(e) => {
+                                                            e.currentTarget.classList.remove('bg-indigo-100/80');
+                                                            const inner = e.currentTarget.querySelector('.timeline-slot-inner');
+                                                            if (inner) {
+                                                                inner.classList.add('border-gray-200');
+                                                                inner.classList.remove('border-indigo-500', 'bg-white');
+                                                            }
+                                                        }}
+                                                        onDrop={(e) => {
+                                                            e.preventDefault();
+                                                            e.currentTarget.classList.remove('bg-indigo-100/80');
+                                                            const inner = e.currentTarget.querySelector('.timeline-slot-inner');
+                                                            if (inner) {
+                                                                inner.classList.add('border-gray-200');
+                                                                inner.classList.remove('border-indigo-500', 'bg-white');
+                                                            }
+                                                            const matchId = e.dataTransfer.getData('matchId');
+                                                            if (matchId) handleRescheduleMatch(matchId, slot.start);
+                                                        }}
+                                                    >
+                                                        <div className="mb-3 px-2 flex items-center justify-between">
+                                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{slot.label.split(' - ')[0]}</span>
+                                                            <span className="h-px flex-1 mx-3 bg-gray-100" />
+                                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{slot.label.split(' - ')[1]}</span>
+                                                        </div>
+                                                        
+                                                        <div className="timeline-slot-inner bg-white/50 border-2 border-dashed border-gray-200 rounded-2xl p-3 min-h-[120px] space-y-3 transition-all duration-200">
+                                                            {slotMatches.map(match => (
+                                                                <div 
+                                                                    key={match.id}
+                                                                    draggable={match.status === MatchStatus.AWAITING_MATCH}
+                                                                    onDragStart={(e) => {
+                                                                        e.dataTransfer.setData('matchId', match.id);
+                                                                        e.dataTransfer.effectAllowed = 'move';
+                                                                        e.currentTarget.classList.add('opacity-50');
+                                                                    }}
+                                                                    onDragEnd={(e) => {
+                                                                        e.currentTarget.classList.remove('opacity-50');
+                                                                    }}
+                                                                    className={`p-4 rounded-xl border shadow-sm transition-all ${
+                                                                        match.status === MatchStatus.COMPLETE ? 'bg-green-50 border-green-200' :
+                                                                        match.status === MatchStatus.ON_GOING ? 'bg-blue-50 border-blue-200 ring-2 ring-blue-100' :
+                                                                        match.status === MatchStatus.AWAITING_MATCH ? 'bg-white border-gray-100 cursor-move hover:border-blue-300 hover:shadow-md active:scale-95' :
+                                                                        'bg-white border-gray-100'
+                                                                    }`}
+                                                                >
+                                                                    <div className="flex justify-between items-start mb-2">
+                                                                        <span className="text-[10px] font-bold text-gray-400 italic">Table {match.table_number}</span>
+                                                                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
+                                                                            match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' :
+                                                                            match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700' :
+                                                                            'bg-gray-100 text-gray-500'
+                                                                        }`}>
+                                                                            {match.status.replace('_', ' ')}
+                                                                        </span>
+                                                                    </div>
+                                                                    <div className="space-y-1">
+                                                                        <div className="flex justify-between items-center">
+                                                                            <p className="text-xs font-black text-gray-800 truncate flex-1">{match.p1_name}</p>
+                                                                            <span className="text-xs font-black text-blue-600 ml-2">{match.p1_score}</span>
+                                                                        </div>
+                                                                        <div className="h-px bg-gray-50 w-full" />
+                                                                        <div className="flex justify-between items-center">
+                                                                            <p className="text-xs font-black text-gray-800 truncate flex-1">{match.p2_name}</p>
+                                                                            <span className="text-xs font-black text-blue-600 ml-2">{match.p2_score}</span>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                            {slotMatches.length === 0 && (
+                                                                <div className="h-full flex items-center justify-center opacity-20">
+                                                                    <span className="text-2xl">☕</span>
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                ))}
+                                {getTimelineData().length === 0 && (
+                                    <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-gray-100">
+                                         <span className="text-4xl mb-4 block">📅</span>
+                                         <p className="text-gray-400 italic">No time slots scheduled yet.</p>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </main>
     );
 }
