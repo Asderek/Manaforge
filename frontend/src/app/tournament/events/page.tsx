@@ -3,6 +3,17 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useToast } from '../../components/Toast';
+import { GoogleMap, useJsApiLoader, Marker, Autocomplete } from '@react-google-maps/api';
+
+const libraries: ("places")[] = ["places"];
+const mapContainerStyle = {
+    width: '100%',
+    height: '400px'
+};
+const defaultCenter = {
+    lat: -23.5505, // Placeholder (São Paulo)
+    lng: -46.6333
+};
 
 type Tournament = {
     id: string;
@@ -21,8 +32,17 @@ export default function EventsPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
+    const [showMapPicker, setShowMapPicker] = useState(false);
+    const [mapCenter, setMapCenter] = useState(defaultCenter);
+    const [autocomplete, setAutocomplete] = useState<google.maps.places.Autocomplete | null>(null);
     const [editingEvent, setEditingEvent] = useState<Tournament | null>(null);
     const { addToast } = useToast();
+
+    const mapsKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+    const { isLoaded, loadError } = useJsApiLoader({
+        googleMapsApiKey: mapsKey,
+        libraries
+    });
 
     const [formData, setFormData] = useState({
         name: '',
@@ -279,13 +299,23 @@ export default function EventsPage() {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Location</label>
-                                    <input
-                                        type="text"
-                                        value={formData.location}
-                                        onChange={e => setFormData({ ...formData, location: e.target.value })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-gray-900"
-                                        placeholder="Main Game Room"
-                                    />
+                                    <div className="relative group">
+                                        <input
+                                            type="text"
+                                            value={formData.location}
+                                            onChange={e => setFormData({ ...formData, location: e.target.value })}
+                                            className="w-full pl-4 pr-16 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-gray-900 transition-all"
+                                            placeholder="Main Game Room"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowMapPicker(true)}
+                                            className="absolute right-1 top-1 bottom-1 px-2.5 bg-gray-50 text-gray-500 rounded-md hover:bg-blue-50 hover:text-blue-600 transition-all text-[10px] font-black uppercase flex items-center gap-1 border border-transparent hover:border-blue-100"
+                                            title="Pick on Map"
+                                        >
+                                            <span className="text-sm">📍</span> Map
+                                        </button>
+                                    </div>
                                 </div>
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Simultaneous Tables</label>
@@ -351,6 +381,116 @@ export default function EventsPage() {
                                 </button>
                             </div>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Google Maps Picker Modal */}
+            {showMapPicker && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 z-[60]">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden">
+                        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50">
+                            <div>
+                                <h3 className="font-bold text-gray-900 text-lg">Pick Venue Location</h3>
+                                <p className="text-[10px] text-gray-500 uppercase font-black">Search or click on the map</p>
+                            </div>
+                            <button onClick={() => setShowMapPicker(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+                        </div>
+                        
+                        {!mapsKey ? (
+                            <div className="p-12 text-center space-y-4">
+                                <div className="text-4xl">⚠️</div>
+                                <h4 className="font-bold text-gray-900">Google Maps API Key Missing</h4>
+                                <p className="text-sm text-gray-500 max-w-sm mx-auto">
+                                    Please set <code className="bg-gray-100 px-1 rounded">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code> in your <code className="bg-gray-100 px-1 rounded">.env.local</code> file to enable this feature.
+                                </p>
+                                <button 
+                                    onClick={() => setShowMapPicker(false)}
+                                    className="px-6 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
+                        ) : !isLoaded ? (
+                            <div className="p-12 text-center space-y-4">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                                <p className="text-sm text-gray-500">Loading Google Maps...</p>
+                            </div>
+                        ) : loadError ? (
+                            <div className="p-12 text-center space-y-4 text-red-600">
+                                <div className="text-4xl">❌</div>
+                                <h4 className="font-bold">Error Loading Google Maps</h4>
+                                <p className="text-sm">Please check your internet connection or API key restrictions.</p>
+                            </div>
+                        ) : (
+                            <div className="p-6 space-y-4">
+                                <div className="relative">
+                                    <Autocomplete
+                                        onLoad={setAutocomplete}
+                                        onPlaceChanged={() => {
+                                            if (autocomplete) {
+                                                const place = autocomplete.getPlace();
+                                                if (place.formatted_address) {
+                                                    setFormData({ ...formData, location: place.formatted_address });
+                                                    if (place.geometry?.location) {
+                                                        setMapCenter({
+                                                            lat: place.geometry.location.lat(),
+                                                            lng: place.geometry.location.lng()
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }}
+                                    >
+                                        <input
+                                            type="text"
+                                            placeholder="Search for a location..."
+                                            className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none text-gray-900 shadow-sm"
+                                        />
+                                    </Autocomplete>
+                                </div>
+                                
+                                <div className="rounded-xl overflow-hidden border border-gray-200 shadow-inner">
+                                    <GoogleMap
+                                        mapContainerStyle={mapContainerStyle}
+                                        center={mapCenter}
+                                        zoom={15}
+                                        onClick={(e) => {
+                                            if (e.latLng) {
+                                                const lat = e.latLng.lat();
+                                                const lng = e.latLng.lng();
+                                                setMapCenter({ lat, lng });
+                                                
+                                                // Reverse geocode to get address
+                                                const geocoder = new google.maps.Geocoder();
+                                                geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+                                                    if (status === "OK" && results?.[0]) {
+                                                        setFormData({ ...formData, location: results[0].formatted_address });
+                                                    }
+                                                });
+                                            }
+                                        }}
+                                    >
+                                        <Marker position={mapCenter} />
+                                    </GoogleMap>
+                                </div>
+
+                                <div className="pt-2 flex justify-end gap-3">
+                                    <div className="flex-1">
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">Selected Place</p>
+                                        <p className="text-xs text-gray-700 font-medium truncate bg-gray-50 p-2 rounded border border-gray-100 italic">
+                                            {formData.location || 'Click or search to select...'}
+                                        </p>
+                                    </div>
+                                    <button
+                                        onClick={() => setShowMapPicker(false)}
+                                        className="px-8 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-lg shadow-blue-100 self-end h-10"
+                                    >
+                                        Confirm
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

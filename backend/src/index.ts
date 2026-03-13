@@ -787,16 +787,16 @@ router.post('/api/tournaments', async (request, env: Env) => {
 	if (!user) return error(401, 'Unauthorized');
 
 	try {
-		const { name, start_date, end_date, location, num_tables, format } = await request.json() as any;
+		const { name, start_date, end_date, location, num_tables, format, status } = await request.json() as any;
 		if (!name || !start_date || !end_date) return error(400, 'Name, Start Date, and End Date are required');
 
 		const id = crypto.randomUUID();
 		await env.DB.prepare(
 			`INSERT INTO tournaments (id, name, start_date, end_date, location, num_tables, format, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 'draft')`
-		).bind(id, name, start_date, end_date, location || null, num_tables || 0, format || null).run();
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+		).bind(id, name, start_date, end_date, location || null, num_tables || 0, format || null, status || 'draft').run();
 
-		return json({ success: true, tournament: { id, name, start_date, end_date, location, num_tables, format, status: 'draft' } });
+		return json({ success: true, tournament: { id, name, start_date, end_date, location, num_tables, format, status: status || 'draft' } });
 	} catch (e: any) {
 		return error(500, e.message);
 	}
