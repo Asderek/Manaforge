@@ -20,7 +20,9 @@ export default function PlayersPage() {
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const [showModal, setShowModal] = useState(false);
     const [editingPlayer, setEditingPlayer] = useState<Player | null>(null);
-    const { addToast } = useToast();
+    const [searchQuery, setSearchQuery] = useState('');
+    const [sortField, setSortField] = useState<'name' | 'country' | 'created_at'>('name');
+    const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
     // Form state
     const [formData, setFormData] = useState({
@@ -30,6 +32,7 @@ export default function PlayersPage() {
         email: ''
     });
 
+    const { addToast } = useToast();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
 
     useEffect(() => {
@@ -96,7 +99,6 @@ export default function PlayersPage() {
         if (pendingDeleteId !== id) {
             setPendingDeleteId(id);
             addToast('Click again to delete', 'warning');
-            // Reset after 3 seconds
             setTimeout(() => setPendingDeleteId(null), 3000);
             return;
         }
@@ -116,6 +118,43 @@ export default function PlayersPage() {
             addToast('Error deleting player', 'error');
             setPendingDeleteId(null);
         }
+    };
+
+    const filteredPlayers = players
+        .filter(p =>
+            p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            (p.country?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+            (p.email?.toLowerCase() || '').includes(searchQuery.toLowerCase())
+        )
+        .sort((a, b) => {
+            let valA: any = a[sortField] || '';
+            let valB: any = b[sortField] || '';
+
+            if (sortField === 'created_at') {
+                valA = new Date(a.created_at).getTime();
+                valB = new Date(b.created_at).getTime();
+            } else {
+                valA = valA.toString().toLowerCase();
+                valB = valB.toString().toLowerCase();
+            }
+
+            if (valA < valB) return sortDirection === 'asc' ? -1 : 1;
+            if (valA > valB) return sortDirection === 'asc' ? 1 : -1;
+            return 0;
+        });
+
+    const toggleSort = (field: 'name' | 'country' | 'created_at') => {
+        if (sortField === field) {
+            setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+        } else {
+            setSortField(field);
+            setSortDirection('asc');
+        }
+    };
+
+    const SortIcon = ({ field }: { field: 'name' | 'country' | 'created_at' }) => {
+        if (sortField !== field) return <span className="text-gray-300 ml-1">⇅</span>;
+        return <span className="text-purple-600 ml-1">{sortDirection === 'asc' ? '↑' : '↓'}</span>;
     };
 
     return (
@@ -143,6 +182,24 @@ export default function PlayersPage() {
             </div>
 
             <div className="max-w-6xl mx-auto p-8">
+                {/* Search and Filter Bar */}
+                <div className="flex flex-col md:flex-row gap-4 mb-6">
+                    <div className="relative flex-1">
+                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 opacity-50">🔍</span>
+                        <input
+                            type="text"
+                            placeholder="Search by name, country or email..."
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                            className="w-full pl-11 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none shadow-sm transition-all text-gray-900"
+                        />
+                    </div>
+                    <div className="bg-gray-100/50 px-4 py-3 rounded-xl border border-gray-200 text-xs text-gray-400 flex items-center gap-2">
+                        <span className="text-purple-500 font-bold">Total:</span>
+                        <span className="text-gray-900 font-normal">{filteredPlayers.length} players</span>
+                    </div>
+                </div>
+
                 {loading ? (
                     <div className="flex justify-center p-12">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
@@ -157,24 +214,49 @@ export default function PlayersPage() {
                             Add your first player →
                         </button>
                     </div>
+                ) : filteredPlayers.length === 0 ? (
+                    <div className="bg-white border border-gray-200 rounded-xl p-12 text-center shadow-sm">
+                        <p className="text-gray-500 italic">No players match your search "{searchQuery}"</p>
+                    </div>
                 ) : (
                     <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
                         <table className="w-full text-left">
                             <thead className="bg-gray-50 border-b border-gray-200">
                                 <tr>
-                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Name</th>
-                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Country</th>
+                                    <th
+                                        className="px-6 py-4 text-xs font-bold text-gray-500 uppercase cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                                        onClick={() => toggleSort('name')}
+                                    >
+                                        <div className="flex items-center">
+                                            Name <SortIcon field="name" />
+                                        </div>
+                                    </th>
+                                    <th
+                                        className="px-6 py-4 text-xs font-bold text-gray-500 uppercase cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                                        onClick={() => toggleSort('country')}
+                                    >
+                                        <div className="flex items-center">
+                                            Country <SortIcon field="country" />
+                                        </div>
+                                    </th>
                                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Email</th>
-                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Joined</th>
+                                    <th
+                                        className="px-6 py-4 text-xs font-bold text-gray-500 uppercase cursor-pointer hover:bg-gray-100 transition-colors select-none"
+                                        onClick={() => toggleSort('created_at')}
+                                    >
+                                        <div className="flex items-center">
+                                            Joined <SortIcon field="created_at" />
+                                        </div>
+                                    </th>
                                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
-                                {players.map(player => (
-                                    <tr key={player.id} className="hover:bg-purple-50/30 transition-colors">
+                                {filteredPlayers.map(player => (
+                                    <tr key={player.id} className="hover:bg-purple-50/30 transition-colors group">
                                         <td className="px-6 py-4">
-                                            <div className="font-bold text-gray-900">{player.name}</div>
-                                            {player.dob && <div className="text-xs text-gray-400">{new Date(player.dob).toLocaleDateString(undefined, { timeZone: 'UTC' })}</div>}
+                                            <div className="font-bold text-gray-900 group-hover:text-purple-600 transition-colors">{player.name}</div>
+                                            {player.dob && <div className="text-[10px] text-gray-400 font-medium uppercase">{new Date(player.dob).toLocaleDateString(undefined, { timeZone: 'UTC' })}</div>}
                                         </td>
                                         <td className="px-6 py-4 text-gray-600">{player.country || '-'}</td>
                                         <td className="px-6 py-4 text-gray-600">{player.email || '-'}</td>
@@ -188,7 +270,7 @@ export default function PlayersPage() {
                                             >
                                                 Edit
                                             </button>
-                                            <button 
+                                            <button
                                                 onClick={() => handleDelete(player.id)}
                                                 className={`${pendingDeleteId === player.id ? 'text-red-600 scale-110' : 'text-red-400'} hover:text-red-600 text-xs font-bold transition-all`}
                                             >
@@ -264,7 +346,7 @@ export default function PlayersPage() {
                                 >
                                     Cancel
                                 </button>
-                                <button 
+                                <button
                                     type="submit"
                                     disabled={isSubmitting}
                                     className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg font-bold hover:bg-purple-700 transition-colors shadow-sm disabled:bg-purple-400 disabled:cursor-not-allowed flex items-center justify-center gap-2"

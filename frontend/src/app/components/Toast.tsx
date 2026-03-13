@@ -49,10 +49,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     }, []);
 
     const typeStyles: Record<ToastType, string> = {
-        info: 'bg-blue-600 text-white',
-        success: 'bg-green-600 text-white',
-        warning: 'bg-amber-500 text-white',
-        error: 'bg-red-600 text-white',
+        info: 'bg-blue-600/60 text-white backdrop-blur-md border border-blue-700',
+        success: 'bg-green-600/60 text-white backdrop-blur-md border border-green-700',
+        warning: 'bg-amber-500/60 text-white backdrop-blur-md border border-amber-600',
+        error: 'bg-red-600/60 text-white backdrop-blur-md border border-red-700',
     };
 
     const typeIcons: Record<ToastType, string> = {

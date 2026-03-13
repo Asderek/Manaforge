@@ -795,6 +795,20 @@ router.delete('/api/players/:id', async (request, env: Env) => {
 // Tournaments CRUD
 // ──────────────────────────────────────────────
 
+router.get('/api/tournaments/dashboard-stats', async (request, env: Env) => {
+	const user = await getSessionUser(request, env);
+	if (!user) return error(401, 'Unauthorized');
+
+	const stats = await env.DB.prepare(`
+		SELECT 
+			(SELECT COUNT(*) FROM players) as total_players,
+			(SELECT COUNT(*) FROM matches WHERE status IN ('TABLE_PENDING', 'AWAITING_MATCH', 'ON_GOING')) as scheduled_matches,
+			(SELECT COUNT(*) FROM tournaments WHERE status = 'active') as active_events
+	`).first();
+
+	return json({ success: true, stats });
+});
+
 router.get('/api/tournaments', async (request, env: Env) => {
 	const user = await getSessionUser(request, env);
 	if (!user) return error(401, 'Unauthorized');

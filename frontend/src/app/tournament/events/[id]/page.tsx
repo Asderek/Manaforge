@@ -570,12 +570,12 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                         <table className="w-full text-left">
                             <thead className="bg-gray-50 border-b border-gray-200">
                                 <tr>
-                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Rank</th>
-                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase">Player</th>
+                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-center">Rank</th>
+                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-center">Player</th>
                                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-center">Score</th>
                                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-center">W-L-D</th>
                                     <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-center">Points</th>
-                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-right">Actions</th>
+                                    <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase text-center">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
@@ -588,8 +588,8 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
 
                                     return (
                                         <tr key={reg.id} className={`${isInactive ? 'opacity-50 grayscale' : ''} hover:bg-gray-50/50 transition-colors`}>
-                                            <td className="px-6 py-4 font-mono text-gray-400">{idx + 1}</td>
-                                            <td className="px-6 py-4">
+                                            <td className="px-6 py-4 font-mono text-gray-400 text-center">{idx + 1}</td>
+                                            <td className="px-6 py-4 text-center">
                                                 <div className={`font-bold ${isInactive ? 'text-gray-400 line-through' : 'text-gray-900'}`}>{reg.player_name}</div>
                                                 {reg.status === 'dropped' && <span className="text-[10px] text-red-500 font-bold uppercase">Dropped</span>}
                                                 {reg.status === 'eliminated' && <span className="text-[10px] text-red-600 font-black uppercase tracking-widest bg-red-50 px-1 rounded">Eliminated</span>}
@@ -603,8 +603,8 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                             <td className="px-6 py-4 text-center font-black text-blue-600">
                                                 {reg.points}
                                             </td>
-                                            <td className="px-6 py-4 text-right">
-                                                <div className="flex items-center justify-end gap-2">
+                                            <td className="px-6 py-4 text-center">
+                                                <div className="flex items-center justify-center gap-2">
                                                     {tournament?.status === 'draft' ? (
                                                         <button 
                                                             onClick={() => handleRemoveRegistration(reg.id)}
