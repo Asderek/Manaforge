@@ -192,6 +192,9 @@ router.post('/api/auth/logout', async (request, env: Env) => {
 // Admin: List pending requests
 router.get('/api/admin/registration-requests', async (request, env: Env) => {
 	try {
+		const user = await getSessionUser(request, env);
+		if (!user || user.role !== 'admin') return error(401, 'Unauthorized');
+
 		const { results } = await env.DB.prepare(
 			`SELECT * FROM registration_requests ORDER BY recaptcha_checked_at DESC`
 		).all();
@@ -202,12 +205,36 @@ router.get('/api/admin/registration-requests', async (request, env: Env) => {
 	}
 });
 
+// Admin: Execute raw SQL (Localhost only)
+router.post('/api/admin/sql', async (request, env: Env) => {
+	try {
+		const user = await getSessionUser(request, env);
+		if (!user || user.role !== 'admin') return error(401, 'Unauthorized');
+
+		const url = new URL(request.url);
+		if (url.hostname !== 'localhost' && url.hostname !== '127.0.0.1') {
+			return error(403, 'Forbidden: SQL Executor is only available on localhost');
+		}
+
+		const { query } = await request.json() as any;
+		if (!query) return error(400, 'Missing query');
+
+		const result = await env.DB.prepare(query).all();
+		return json(result);
+	} catch (e: any) {
+		console.error("SQL Execution error:", e);
+		return error(500, e.message);
+	}
+});
+
 // Admin: Approve request
 router.post('/api/admin/registration-requests/:id/approve', async (request, env: Env) => {
 	try {
+		const user = await getSessionUser(request, env);
+		if (!user || user.role !== 'admin') return error(401, 'Unauthorized');
+
 		const requestId = request.params.id;
-		// HARDCODED admin ID for now until sessions are built
-		const adminId = 'usr_admin123';
+		const adminId = user.user_id;
 
 		// 1. Mark request as approved
 		const updateResult = await env.DB.prepare(
@@ -270,6 +297,9 @@ router.post('/api/admin/registration-requests/:id/approve', async (request, env:
 // Admin: Delete request (Hard delete so user can reuse email instantly)
 router.delete('/api/admin/registration-requests/:id', async (request, env: Env) => {
 	try {
+		const userSession = await getSessionUser(request, env);
+		if (!userSession || userSession.role !== 'admin') return error(401, 'Unauthorized');
+
 		const requestId = request.params.id;
 
 		const pendingRequest: any = await env.DB.prepare(
@@ -792,11 +822,11 @@ router.post('/api/tournaments', async (request, env: Env) => {
 
 		const id = crypto.randomUUID();
 		await env.DB.prepare(
-			`INSERT INTO tournaments (id, name, start_date, end_date, location, num_tables, format, status)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+			`INSERT INTO tournaments (id, name, start_date, end_date, location, num_tables, format, status, current_round)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`
 		).bind(id, name, start_date, end_date, location || null, num_tables || 0, format || null, status || 'draft').run();
 
-		return json({ success: true, tournament: { id, name, start_date, end_date, location, num_tables, format, status: status || 'draft' } });
+		return json({ success: true, tournament: { id, name, start_date, end_date, location, num_tables, format, status: status || 'draft', current_round: 0 } });
 	} catch (e: any) {
 		return error(500, e.message);
 	}
@@ -874,15 +904,86 @@ router.put('/api/tournaments/:tournamentId/registrations/:id', async (request, e
 	const user = await getSessionUser(request, env);
 	if (!user) return error(401, 'Unauthorized');
 
-	const { id } = request.params;
+	const { tournamentId, id } = request.params;
 	try {
-		const { deck_id, points, wins, losses, draws, dropped } = await request.json() as any;
-		await env.DB.prepare(
-			`UPDATE tournament_registrations 
-			 SET deck_id = ?, points = ?, wins = ?, losses = ?, draws = ?, dropped = ? 
-			 WHERE id = ?`
-		).bind(deck_id || null, points || 0, wins || 0, losses || 0, draws || 0, dropped ? 1 : 0, id).run();
+		const body = await request.json() as any;
+		
+		// 1. Get current registration
+		const reg = await env.DB.prepare(`SELECT * FROM tournament_registrations WHERE id = ?`).bind(id).first() as any;
+		if (!reg) return error(404, 'Registration not found');
 
+		const deck_id = 'deck_id' in body ? body.deck_id : reg.deck_id;
+		const points = 'points' in body ? body.points : reg.points;
+		const wins = 'wins' in body ? body.wins : reg.wins;
+		const losses = 'losses' in body ? body.losses : reg.losses;
+		const draws = 'draws' in body ? body.draws : reg.draws;
+		const dropped = 'dropped' in body ? (body.dropped ? 1 : 0) : reg.dropped;
+
+		const statements = [];
+
+		// 2. Update registration
+		statements.push(
+			env.DB.prepare(
+				`UPDATE tournament_registrations 
+				 SET deck_id = ?, points = ?, wins = ?, losses = ?, draws = ?, dropped = ? 
+				 WHERE id = ?`
+			).bind(deck_id || null, points || 0, wins || 0, losses || 0, draws || 0, dropped, id)
+		);
+
+		// 3. Forfeit Logic: If newly dropped, find current non-completed match and award win to opponent
+		if (dropped && !reg.dropped) {
+			const activeMatch = await env.DB.prepare(
+				`SELECT * FROM matches 
+				 WHERE tournament_id = ? 
+				 AND status != 'completed' 
+				 AND (p1_id = ? OR p2_id = ?)
+				 ORDER BY round_number DESC
+				 LIMIT 1`
+			).bind(tournamentId, reg.player_id, reg.player_id).first() as any;
+
+			if (activeMatch) {
+				const isP1 = activeMatch.p1_id === reg.player_id;
+				statements.push(
+					env.DB.prepare(
+						`UPDATE matches 
+						 SET p1_score = ?, p2_score = ?, draws = 0, status = 'completed' 
+						 WHERE id = ?`
+					).bind(isP1 ? 0 : 2, isP1 ? 2 : 0, activeMatch.id)
+				);
+				
+				// Standings refresh helper
+				const refreshStandings = (playerId: string) => {
+					return env.DB.prepare(`
+						UPDATE tournament_registrations
+						SET 
+							wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
+							draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
+							losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
+							points = (
+								SELECT 
+									(COUNT(CASE WHEN (p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score) THEN 1 END) * 3) +
+									(COUNT(CASE WHEN (p1_id = ? OR p2_id = ?) AND p1_score = p2_score THEN 1 END) * 1)
+								FROM matches
+								WHERE tournament_id = ? AND status = 'completed'
+							)
+						WHERE tournament_id = ? AND player_id = ?
+					`).bind(
+						tournamentId, playerId, playerId, 
+						tournamentId, playerId, playerId, 
+						tournamentId, playerId, playerId, 
+						playerId, playerId, playerId, playerId, tournamentId, 
+						tournamentId, playerId
+					);
+				};
+
+				statements.push(refreshStandings(activeMatch.p1_id));
+				if (activeMatch.p2_id !== 'tobias-boon') {
+					statements.push(refreshStandings(activeMatch.p2_id));
+				}
+			}
+		}
+
+		await env.DB.batch(statements);
 		return json({ success: true });
 	} catch (e: any) {
 		return error(500, e.message);
@@ -953,7 +1054,7 @@ router.post('/api/tournaments/:id/pairings', async (request, env: Env) => {
 		for (let i = 0; i < playerIds.length; i += 2) {
 			const p1 = playerIds[i];
 			const p2 = playerIds[i + 1] || 'tobias-boon'; // Tobias Boon handles the bye
-			
+
 			matches.push({
 				id: crypto.randomUUID(),
 				tournament_id: tournamentId,
@@ -965,15 +1066,21 @@ router.post('/api/tournaments/:id/pairings', async (request, env: Env) => {
 			});
 		}
 
-		// 5. Batch insert
-		const statements = matches.map(m => 
+		// 5. Batch insert matches and update tournament status
+		const statements = matches.map(m =>
 			env.DB.prepare(
 				`INSERT INTO matches (id, tournament_id, round_number, p1_id, p2_id, table_number, status)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`
 			).bind(m.id, m.tournament_id, m.round_number, m.p1_id, m.p2_id, m.table_number, m.status)
 		);
 
-		await env.DB.batch(statements);
+		// 7. Execute transaction: Pairings + Status + Current Round
+		const batch = [
+			...statements,
+			env.DB.prepare(`UPDATE tournaments SET status = 'active', current_round = ? WHERE id = ? AND status = 'draft'`).bind(roundNumber, tournamentId),
+			env.DB.prepare(`UPDATE tournaments SET current_round = ? WHERE id = ? AND status = 'active'`).bind(roundNumber, tournamentId)
+		];
+		await env.DB.batch(batch);
 
 		return json({ success: true, count: matches.length, round: roundNumber });
 	} catch (e: any) {
@@ -1006,22 +1113,68 @@ router.put('/api/tournaments/:tournamentId/matches/:id', async (request, env: En
 	const user = await getSessionUser(request, env);
 	if (!user) return error(401, 'Unauthorized');
 
-	const { id } = request.params;
+	const { tournamentId, id } = request.params;
 	try {
 		const { p1_score, p2_score, draws, status, table_number, scheduled_at } = await request.json() as any;
-		await env.DB.prepare(
-			`UPDATE matches 
-			 SET p1_score = ?, p2_score = ?, draws = ?, status = ?, table_number = ?, scheduled_at = ? 
-			 WHERE id = ?`
-		).bind(
-			p1_score || 0, 
-			p2_score || 0, 
-			draws || 0, 
-			status || 'pending', 
-			table_number || null, 
-			scheduled_at || null, 
-			id
-		).run();
+		
+		// 1. Get original match to find player IDs
+		const match = await env.DB.prepare(
+			`SELECT p1_id, p2_id FROM matches WHERE id = ?`
+		).bind(id).first() as any;
+
+		if (!match) return error(404, 'Match not found');
+
+		const statements = [];
+
+		// 2. Update the match
+		statements.push(
+			env.DB.prepare(
+				`UPDATE matches 
+				 SET p1_score = ?, p2_score = ?, draws = ?, status = ?, table_number = ?, scheduled_at = ? 
+				 WHERE id = ?`
+			).bind(
+				p1_score || 0,
+				p2_score || 0,
+				draws || 0,
+				status || 'pending',
+				table_number || null,
+				scheduled_at || null,
+				id
+			)
+		);
+
+		// 3. AwardWin Logic: Recalculate standings for both players
+		// We sum up all matches for these players in this tournament
+		const updatePlayerStandings = (playerId: string) => {
+			return env.DB.prepare(`
+				UPDATE tournament_registrations
+				SET 
+					wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
+					draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
+					losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'completed' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
+					points = (
+						SELECT 
+							(COUNT(CASE WHEN (p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score) THEN 1 END) * 3) +
+							(COUNT(CASE WHEN (p1_id = ? OR p2_id = ?) AND p1_score = p2_score THEN 1 END) * 1)
+						FROM matches
+						WHERE tournament_id = ? AND status = 'completed'
+					)
+				WHERE tournament_id = ? AND player_id = ?
+			`).bind(
+				tournamentId, playerId, playerId, 
+				tournamentId, playerId, playerId, 
+				tournamentId, playerId, playerId, 
+				playerId, playerId, playerId, playerId, tournamentId, 
+				tournamentId, playerId
+			);
+		};
+
+		statements.push(updatePlayerStandings(match.p1_id));
+		if (match.p2_id !== 'tobias-boon') {
+			statements.push(updatePlayerStandings(match.p2_id));
+		}
+
+		await env.DB.batch(statements);
 
 		return json({ success: true });
 	} catch (e: any) {

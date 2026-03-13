@@ -24,6 +24,7 @@ type Tournament = {
     num_tables: number;
     format: string | null;
     status: 'draft' | 'active' | 'completed';
+    current_round: number;
 };
 
 export default function EventsPage() {
@@ -219,9 +220,18 @@ export default function EventsPage() {
                             <div key={event.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow group">
                                 <div className="p-6">
                                     <div className="flex justify-between items-start mb-4">
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${getStatusColor(event.status)}`}>
-                                            {event.status}
-                                        </span>
+                                        <div className="flex gap-2">
+                                            {event.status !== 'draft' && (
+                                                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${getStatusColor(event.status)}`}>
+                                                    {event.status}
+                                                </span>
+                                            )}
+                                            {event.current_round > 0 && (
+                                                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase border bg-purple-100 text-purple-700 border-purple-200">
+                                                    Round {event.current_round}
+                                                </span>
+                                            )}
+                                        </div>
                                         <div className="flex gap-2">
                                             <button onClick={() => handleEdit(event)} className="text-gray-400 hover:text-blue-600 transition-colors">
                                                 ✏️
@@ -236,7 +246,7 @@ export default function EventsPage() {
                                         {event.location ? (
                                             <button 
                                                 onClick={() => handleViewLocation(event.location!)}
-                                                className="flex items-center gap-1 hover:text-blue-600 hover:underline transition-colors text-left"
+                                                className="flex items-center gap-1 hover:text-blue-600 hover:underline transition-colors text-left cursor-pointer"
                                             >
                                                 📍 {event.location}
                                             </button>
@@ -368,18 +378,20 @@ export default function EventsPage() {
                                         <option value="Limited">Limited (Draft/Sealed)</option>
                                     </select>
                                 </div>
-                                <div>
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Status</label>
-                                    <select
-                                        value={formData.status}
-                                        onChange={e => setFormData({ ...formData, status: e.target.value as any })}
-                                        className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-gray-900 bg-white"
-                                    >
-                                        <option value="draft">Draft</option>
-                                        <option value="active">Active</option>
-                                        <option value="completed">Completed</option>
-                                    </select>
-                                </div>
+                                {editingEvent && (
+                                    <div>
+                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Status</label>
+                                        <select
+                                            value={formData.status}
+                                            onChange={e => setFormData({ ...formData, status: e.target.value as any })}
+                                            className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none text-gray-900 bg-white"
+                                        >
+                                            <option value="draft">Draft</option>
+                                            <option value="active">Active</option>
+                                            <option value="completed">Completed</option>
+                                        </select>
+                                    </div>
+                                )}
                             </div>
                             <div className="pt-4 flex gap-3">
                                 <button
