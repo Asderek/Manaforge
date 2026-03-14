@@ -1223,9 +1223,56 @@ router.delete('/api/tournaments/:tournamentId/matches/:id', async (request, env:
 	const user = await getSessionUser(request, env);
 	if (!user) return error(401, 'Unauthorized');
 
-	const { id } = request.params;
-	await env.DB.prepare(`DELETE FROM matches WHERE id = ?`).bind(id).run();
-	return json({ success: true });
+	const { tournamentId, id } = request.params;
+	try {
+		// 1. Get match details before deleting (needed for standings refresh)
+		const match = await env.DB.prepare(
+			`SELECT * FROM matches WHERE id = ?`
+		).bind(id).first() as any;
+
+		if (!match) return error(404, 'Match not found');
+
+		const statements = [];
+
+		// 2. Delete the match
+		statements.push(env.DB.prepare(`DELETE FROM matches WHERE id = ?`).bind(id));
+
+		// 3. Refresh standings for both players
+		const updatePlayerStandings = (playerId: string) => {
+			return env.DB.prepare(`
+				UPDATE tournament_registrations
+				SET 
+					wins = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND ((p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score))),
+					draws = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND (p1_id = ? OR p2_id = ?) AND p1_score = p2_score),
+					losses = (SELECT COUNT(*) FROM matches WHERE tournament_id = ? AND status = 'COMPLETE' AND ((p1_id = ? AND p1_score < p2_score) OR (p2_id = ? AND p2_score < p1_score))),
+					points = (
+						SELECT 
+							(COUNT(CASE WHEN (p1_id = ? AND p1_score > p2_score) OR (p2_id = ? AND p2_score > p1_score) THEN 1 END) * 3) +
+							(COUNT(CASE WHEN (p1_id = ? OR p2_id = ?) AND p1_score = p2_score THEN 1 END) * 1)
+						FROM matches
+						WHERE tournament_id = ? AND status = 'COMPLETE'
+					)
+				WHERE tournament_id = ? AND player_id = ?
+			`).bind(
+				tournamentId, playerId, playerId, 
+				tournamentId, playerId, playerId, 
+				tournamentId, playerId, playerId, 
+				playerId, playerId, playerId, playerId, tournamentId, 
+				tournamentId, playerId
+			);
+		};
+
+		statements.push(updatePlayerStandings(match.p1_id));
+		if (match.p2_id !== 'tobias-boon') {
+			statements.push(updatePlayerStandings(match.p2_id));
+		}
+
+		await env.DB.batch(statements);
+
+		return json({ success: true });
+	} catch (e: any) {
+		return error(500, e.message);
+	}
 });
 
 

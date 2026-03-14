@@ -57,7 +57,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
     const [allPlayers, setAllPlayers] = useState<Player[]>([]);
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<'standings' | 'matches'>('standings');
-    
+
     // UI state
     const [showRegModal, setShowRegModal] = useState(false);
     const [selectedPlayerId, setSelectedPlayerId] = useState('');
@@ -72,8 +72,9 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
     const [pendingForfeitId, setPendingForfeitId] = useState<string | null>(null);
     const [pendingEliminateId, setPendingEliminateId] = useState<string | null>(null);
     const [pendingSaveResultId, setPendingSaveResultId] = useState<string | null>(null);
+    const [pendingDeleteMatchId, setPendingDeleteMatchId] = useState<string | null>(null);
     const [pendingGenerateRound, setPendingGenerateRound] = useState(false);
-    
+
     // Manual Match State
     const [showManualMatchModal, setShowManualMatchModal] = useState(false);
     const [p1ManualMatch, setP1ManualMatch] = useState<string>('');
@@ -231,35 +232,46 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         const start = new Date(tournament.start_date);
         const end = new Date(tournament.end_date);
         const slots = [];
+
         let current = new Date(start);
-        
         while (current < end) {
-            const next = new Date(current.getTime() + 2 * 60 * 60 * 1000);
+            const slotEnd = new Date(current.getTime() + 2 * 60 * 60 * 1000);
+            const nextDay = new Date(current);
+            nextDay.setDate(nextDay.getDate() + 1);
+            nextDay.setHours(0, 0, 0, 0);
+
+            // If slot crosses into next day, cap it at midnight
+            const actualEnd = slotEnd < nextDay ? slotEnd : nextDay;
+            const finalEnd = actualEnd < end ? actualEnd : end;
+
             slots.push({
                 start: current.toISOString(),
-                label: `${current.getHours().toString().padStart(2, '0')}:00 - ${next.getHours().toString().padStart(2, '0')}:00`
+                end: finalEnd.toISOString(),
+                label: `${current.getHours().toString().padStart(2, '0')}:00 - ${finalEnd.getHours().toString().padStart(2, '0')}:00`
             });
-            current = next;
+
+            current = finalEnd;
         }
         return slots;
     };
 
     const getTimelineData = () => {
         if (!tournament) return [];
-        const slots = getTimeSlots();
-        const days: { date: string, formattedDate: string, slots: typeof slots }[] = [];
-        
-        slots.forEach(slot => {
-            const dateObj = new Date(slot.start);
-            const dateStr = dateObj.toISOString().split('T')[0];
+        const pools = getTimeSlots();
+        const days: { date: string, formattedDate: string, slots: typeof pools }[] = [];
+
+        pools.forEach(pool => {
+            const dateObj = new Date(pool.start);
+            // Use local date string for grouping to avoid UTC offset issues
+            const dateStr = `${dateObj.getFullYear()}-${(dateObj.getMonth() + 1).toString().padStart(2, '0')}-${dateObj.getDate().toString().padStart(2, '0')}`;
             const formattedDate = dateObj.toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' });
-            
+
             let day = days.find(d => d.date === dateStr);
             if (!day) {
                 day = { date: dateStr, formattedDate, slots: [] };
                 days.push(day);
             }
-            day.slots.push(slot);
+            day.slots.push(pool);
         });
         return days;
     };
@@ -289,6 +301,9 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         const match = matches.find(m => m.id === matchId);
         if (!match || !tournament) return;
 
+        // Skip if dropping into the same slot
+        if (match.scheduled_at === newSlot) return;
+
         // Constraint: Only Allow dragging if match.status is AWAITING_MATCH or TABLE_PENDING
         const allowedStatuses = [MatchStatus.AWAITING_MATCH, MatchStatus.TABLE_PENDING];
         if (!allowedStatuses.includes(match.status)) {
@@ -298,7 +313,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
 
         // Find available table in target slot
         const matchesInTargetSlot = matches.filter(m => m.scheduled_at === newSlot && m.status !== MatchStatus.CANCELED);
-        
+
         let targetTable: number | null = match.table_number;
         const isOriginalTableTaken = !targetTable || matchesInTargetSlot.some(m => m.table_number === targetTable);
 
@@ -369,6 +384,41 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
         } catch (err) {
             addToast('Failed to save results', 'error');
             setPendingSaveResultId(null);
+        }
+    };
+
+    const handleDeleteMatch = async (matchId: string) => {
+        const match = matches.find(m => m.id === matchId);
+        if (!match) return;
+
+        // Restriction: Only allow deleting matches that are AWAITING_MATCH or TABLE_PENDING
+        const deletableStatuses = [MatchStatus.AWAITING_MATCH, MatchStatus.TABLE_PENDING];
+        if (!deletableStatuses.includes(match.status)) {
+            addToast('Only awaiting or table-pending matches can be deleted', 'error');
+            return;
+        }
+
+        if (pendingDeleteMatchId !== matchId) {
+            setPendingDeleteMatchId(matchId);
+            addToast('Click again to confirm deletion', 'warning');
+            setTimeout(() => setPendingDeleteMatchId(null), 3000);
+            return;
+        }
+
+        try {
+            const res = await fetch(`${apiUrl}/api/tournaments/${tournamentId}/matches/${matchId}`, {
+                method: 'DELETE',
+                credentials: 'include'
+            });
+            if (res.ok) {
+                addToast('Match deleted', 'success');
+                setPendingDeleteMatchId(null);
+                loadData();
+            } else {
+                addToast('Failed to delete match', 'error');
+            }
+        } catch (err) {
+            addToast('Network error', 'error');
         }
     };
 
@@ -479,15 +529,15 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                             )}
                         </div>
                     </div>
-                    
+
                     <div className="flex gap-8 mt-6">
-                        <button 
+                        <button
                             onClick={() => setActiveTab('standings')}
                             className={`pb-4 px-2 font-bold text-sm transition-colors border-b-2 ${activeTab === 'standings' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                         >
                             Standings ({registrations.length})
                         </button>
-                        <button 
+                        <button
                             onClick={() => setActiveTab('matches')}
                             className={`pb-4 px-2 font-bold text-sm transition-colors border-b-2 ${activeTab === 'matches' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
                         >
@@ -502,62 +552,61 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                 <div className="mb-8">
                     <h2 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">Arena Control Panel</h2>
                     <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <button 
+                        <button
                             onClick={handleGenerateRounds}
                             disabled={
-                                isGenerating || 
-                                (registrations.length < 2) || 
+                                isGenerating ||
+                                (registrations.length < 2) ||
                                 (matches.length > 0 && tournament?.status === 'draft') ||
                                 matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED)
                             }
-                            className={`p-4 rounded-xl font-bold transition-all shadow-sm disabled:bg-gray-100 disabled:shadow-none flex flex-col items-center justify-center gap-2 group ${
-                                pendingGenerateRound 
-                                ? 'bg-red-600 text-white scale-105 shadow-red-100' 
+                            className={`p-4 rounded-xl font-bold transition-all shadow-sm disabled:bg-gray-100 disabled:shadow-none flex flex-col items-center justify-center gap-2 group ${pendingGenerateRound
+                                ? 'bg-red-600/75 text-red-700 border border-red-200 scale-105 shadow-red-100'
                                 : matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED)
-                                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                                : 'bg-blue-600 text-white hover:bg-blue-700'
-                            }`}
+                                    ? 'bg-gray-200/50 text-gray-400 cursor-not-allowed border border-gray-100'
+                                    : 'bg-blue-600/75 text-blue-700 border border-blue-200 hover:bg-blue-600/40'
+                                }`}
                         >
                             <span className="text-2xl group-hover:scale-110 transition-transform">
                                 {matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED) ? '⏳' : pendingGenerateRound ? '🎯' : '🎲'}
                             </span>
                             <span>
-                                {isGenerating ? 'Starting...' : 
-                                 matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED) ? 'Round in Progress' :
-                                 pendingGenerateRound ? 'Confirm?' : 
-                                 `Start Round ${(tournament?.current_round || 0) + 1}`}
+                                {isGenerating ? 'Starting...' :
+                                    matches.some(m => m.round_number === tournament?.current_round && m.status !== MatchStatus.COMPLETE && m.status !== MatchStatus.CANCELED) ? 'Round in Progress' :
+                                        pendingGenerateRound ? 'Confirm?' :
+                                            `Start Round ${(tournament?.current_round || 0) + 1}`}
                             </span>
                         </button>
-                        
-                        <button 
+
+                        <button
                             onClick={() => {
                                 setModalMode('assign');
                                 setShowMapModal(true);
                                 const slots = getTimeSlots();
                                 if (slots.length > 0 && !selectedSlot) setSelectedSlot(slots[0].start);
                             }}
-                            className="bg-emerald-600 text-white p-4 rounded-xl font-bold hover:bg-emerald-700 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
+                            className="bg-emerald-600/75 text-emerald-700 border border-emerald-200 p-4 rounded-xl font-bold hover:bg-emerald-600/40 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
                         >
                             <span className="text-2xl group-hover:scale-110 transition-transform">🗺️</span>
                             <span>Arena Map</span>
                         </button>
-                        
-                        <button 
+
+                        <button
                             onClick={() => {
                                 setModalMode('results');
                                 setShowMapModal(true);
                                 const slots = getTimeSlots();
                                 if (slots.length > 0 && !selectedSlot) setSelectedSlot(slots[0].start);
                             }}
-                            className="bg-purple-600 text-white p-4 rounded-xl font-bold hover:bg-purple-700 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
+                            className="bg-purple-600/75 text-purple-700 border border-purple-200 p-4 rounded-xl font-bold hover:bg-purple-600/40 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
                         >
                             <span className="text-2xl group-hover:scale-110 transition-transform">📊</span>
                             <span>Set Results</span>
                         </button>
-                        
-                        <button 
+
+                        <button
                             onClick={() => setShowTimelineModal(true)}
-                            className="bg-indigo-600 text-white p-4 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
+                            className="bg-indigo-600/75 text-indigo-700 border border-indigo-200 p-4 rounded-xl font-bold hover:bg-indigo-600/40 transition-all shadow-sm flex flex-col items-center justify-center gap-2 group"
                         >
                             <span className="text-2xl group-hover:scale-110 transition-transform">📅</span>
                             <span>See Timeline</span>
@@ -579,9 +628,9 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-100">
-                                 {registrations.map((reg, idx) => {
-                                    const hasActiveMatches = matches.some(m => 
-                                        (m.p1_id === reg.player_id || m.p2_id === reg.player_id) && 
+                                {registrations.map((reg, idx) => {
+                                    const hasActiveMatches = matches.some(m =>
+                                        (m.p1_id === reg.player_id || m.p2_id === reg.player_id) &&
                                         (m.status === MatchStatus.TABLE_PENDING || m.status === MatchStatus.AWAITING_MATCH || m.status === MatchStatus.ON_GOING)
                                     );
                                     const isInactive = reg.status === 'dropped' || reg.status === 'eliminated';
@@ -595,7 +644,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                 {reg.status === 'eliminated' && <span className="text-[10px] text-red-600 font-black uppercase tracking-widest bg-red-50 px-1 rounded">Eliminated</span>}
                                             </td>
                                             <td className="px-6 py-4 text-center text-gray-600 font-medium">
-                                                {reg.wins*3 + reg.draws} pts
+                                                {reg.wins * 3 + reg.draws} pts
                                             </td>
                                             <td className="px-6 py-4 text-center text-gray-400">
                                                 {reg.wins} / {reg.losses} / {reg.draws}
@@ -606,7 +655,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                             <td className="px-6 py-4 text-center">
                                                 <div className="flex items-center justify-center gap-2">
                                                     {tournament?.status === 'draft' ? (
-                                                        <button 
+                                                        <button
                                                             onClick={() => handleRemoveRegistration(reg.id)}
                                                             className={`${pendingDeleteId === reg.id ? 'text-red-600 scale-110' : 'text-red-400'} hover:text-red-600 text-xs font-bold transition-all`}
                                                         >
@@ -615,14 +664,14 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                     ) : (
                                                         !isInactive && (
                                                             <>
-                                                                <button 
+                                                                <button
                                                                     onClick={() => handleUpdateStatus(reg.id, 'dropped')}
                                                                     className={`${pendingForfeitId === reg.id ? 'text-red-600 scale-110' : 'text-orange-500'} hover:text-orange-600 text-xs font-bold transition-all bg-orange-50 px-2 py-1 rounded border border-orange-100 shadow-sm`}
                                                                     title="Player chooses to leave the tournament"
                                                                 >
                                                                     {pendingForfeitId === reg.id ? 'Confirm?' : 'Forfeit'}
                                                                 </button>
-                                                                <button 
+                                                                <button
                                                                     onClick={() => handleUpdateStatus(reg.id, 'eliminated')}
                                                                     disabled={hasActiveMatches}
                                                                     className={`${pendingEliminateId === reg.id ? 'text-red-600 scale-110' : hasActiveMatches ? 'text-gray-300 bg-gray-50 border-gray-100 cursor-not-allowed' : 'text-red-500 bg-red-50 border-red-100 hover:bg-red-100'} text-xs font-bold transition-all px-2 py-1 rounded border shadow-sm`}
@@ -659,7 +708,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                     <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">Override or add matches</p>
                                 </div>
                             </div>
-                            <button 
+                            <button
                                 onClick={() => {
                                     setP1ManualMatch('');
                                     setP2ManualMatch('');
@@ -674,13 +723,12 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                         {matches.length === 0 ? (
                             <div className="bg-white border-2 border-dashed border-gray-200 rounded-2xl p-12 text-center">
                                 <p className="text-gray-500 mb-4">No matches recorded yet.</p>
-                                <button 
+                                <button
                                     onClick={handleGenerateRounds}
-                                    className={`px-6 py-2 rounded-lg font-bold transition-all shadow-sm ${
-                                        pendingGenerateRound 
-                                        ? 'bg-red-600 text-white scale-105' 
+                                    className={`px-6 py-2 rounded-lg font-bold transition-all shadow-sm ${pendingGenerateRound
+                                        ? 'bg-red-600 text-white scale-105'
                                         : 'bg-blue-600 text-white hover:bg-blue-700'
-                                    }`}
+                                        }`}
                                 >
                                     {pendingGenerateRound ? 'Confirm?' : `Start Round ${(tournament?.current_round || 0) + 1}`}
                                 </button>
@@ -719,24 +767,30 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-4">
-                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
-                                                            match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' : 
+                                                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' :
                                                             match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700 animate-pulse' :
-                                                            match.status === MatchStatus.AWAITING_MATCH ? 'bg-orange-100 text-orange-700' :
-                                                            match.status === MatchStatus.CANCELED ? 'bg-red-100 text-red-700' :
-                                                            'bg-gray-100 text-gray-500'
-                                                        }`}>
+                                                                match.status === MatchStatus.AWAITING_MATCH ? 'bg-orange-100 text-orange-700' :
+                                                                    match.status === MatchStatus.CANCELED ? 'bg-red-100 text-red-700' :
+                                                                        'bg-gray-100 text-gray-500'
+                                                            }`}>
                                                             {match.status.replace('_', ' ')}
                                                         </span>
                                                         {match.status === MatchStatus.AWAITING_MATCH && (
-                                                            <button 
+                                                            <button
                                                                 onClick={() => handleStartMatch(match.id)}
                                                                 className="bg-green-600 text-white px-3 py-1 rounded text-xs font-bold hover:bg-green-700 transition-colors"
                                                             >
                                                                 Start Match
                                                             </button>
                                                         )}
-                                                        <button className="text-blue-600 font-bold text-sm hover:underline">Edit</button>
+                                                        {[MatchStatus.AWAITING_MATCH, MatchStatus.TABLE_PENDING].includes(match.status) && (
+                                                            <button
+                                                                onClick={() => handleDeleteMatch(match.id)}
+                                                                className={`font-bold text-sm transition-colors ${pendingDeleteMatchId === match.id ? 'text-red-700 bg-red-100 px-2 py-1 rounded' : 'text-red-600 hover:underline'}`}
+                                                            >
+                                                                {pendingDeleteMatchId === match.id ? 'Confirm?' : 'Delete'}
+                                                            </button>
+                                                        )}
                                                     </div>
                                                 </div>
                                             ))}
@@ -759,7 +813,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                         </div>
                         <div className="p-6">
                             <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Select from Community</label>
-                            <select 
+                            <select
                                 value={selectedPlayerId}
                                 onChange={e => setSelectedPlayerId(e.target.value)}
                                 className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 outline-none text-gray-900 bg-white mb-6"
@@ -772,15 +826,15 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                     ))
                                 }
                             </select>
-                            
+
                             <div className="flex gap-3">
-                                <button 
+                                <button
                                     onClick={() => setShowRegModal(false)}
                                     className="flex-1 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg font-bold hover:bg-gray-50 transition-colors"
                                 >
                                     Cancel
                                 </button>
-                                <button 
+                                <button
                                     onClick={handleRegister}
                                     disabled={!selectedPlayerId}
                                     className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg font-bold hover:bg-purple-700 transition-colors shadow-sm disabled:opacity-50"
@@ -788,7 +842,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                     Register Player
                                 </button>
                             </div>
-                            
+
                             <div className="mt-6 pt-6 border-t border-gray-100 text-center">
                                 <p className="text-xs text-gray-400">Can't find the player?</p>
                                 <Link href="/tournament/players" className="text-xs text-purple-600 font-bold hover:underline">
@@ -810,13 +864,13 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                 <h3 className="text-xl font-black text-gray-900">{modalMode === 'assign' ? 'Arena Map & Scheduling' : 'Input Match Results'}</h3>
                                 <p className="text-sm text-gray-500">{modalMode === 'assign' ? 'Assign pairings to physical tables and time slots' : 'Enter victory counts and draws for completed matches'}</p>
                             </div>
-                            <button 
+                            <button
                                 onClick={() => {
                                     setShowMapModal(false);
                                     setSelectedTable(null);
                                     setResultEditMatch(null);
                                     setScores({ p1: 0, p2: 0, draws: 0 });
-                                }} 
+                                }}
                                 className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-all shadow-sm"
                             >
                                 ✕
@@ -840,19 +894,17 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                         setSelectedTable(null);
                                                         setResultEditMatch(null);
                                                     }}
-                                                    className={`px-6 py-3 rounded-xl font-bold text-sm whitespace-nowrap transition-all border-2 relative ${
-                                                        selectedSlot === slot.start 
-                                                        ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-200 scale-105' 
-                                                        : 'bg-white border-gray-100 text-gray-500 hover:border-blue-200 hover:text-blue-600'
-                                                    }`}
+                                                    className={`px-6 py-3 rounded-xl font-bold text-sm whitespace-nowrap transition-all border-2 relative ${selectedSlot === slot.start
+                                                        ? 'bg-blue-700 border-blue-700 text-white shadow-xl shadow-blue-500/20 scale-105'
+                                                        : 'bg-white border-gray-100 text-gray-500 hover:border-blue-400 hover:text-blue-700'
+                                                        }`}
                                                 >
                                                     {slot.label}
                                                     {tableCount > 0 && (
-                                                        <div className={`absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ring-2 ${
-                                                            selectedSlot === slot.start 
-                                                            ? 'bg-emerald-500 text-white border border-emerald-400 ring-white' 
+                                                        <div className={`absolute -top-2 -right-2 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-black shadow-sm ring-2 ${selectedSlot === slot.start
+                                                            ? 'bg-emerald-500 text-white border border-emerald-400 ring-white'
                                                             : 'bg-blue-600 text-white ring-white'
-                                                        }`}>
+                                                            }`}>
                                                             {tableCount}
                                                         </div>
                                                     )}
@@ -868,7 +920,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                     {Array.from({ length: tournament.num_tables || 0 }).map((_, i) => {
                                         const tableNum = i + 1;
                                         const assignedMatch = matches.find(m => m.table_number === tableNum && m.scheduled_at === selectedSlot);
-                                        
+
                                         return (
                                             <button
                                                 key={tableNum}
@@ -881,23 +933,22 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                         }
                                                     }
                                                 }}
-                                                className={`aspect-square rounded-2xl border-2 flex flex-col items-center justify-center gap-2 transition-all relative group ${
-                                                    assignedMatch 
-                                                    ? modalMode === 'results' 
+                                                className={`aspect-square rounded-2xl border-2 flex flex-col items-center justify-center gap-2 transition-all relative group ${assignedMatch
+                                                    ? modalMode === 'results'
                                                         ? resultEditMatch?.id === assignedMatch.id
                                                             ? 'bg-purple-50 border-purple-500 text-purple-700 ring-4 ring-purple-50 scale-105'
                                                             : 'bg-white border-gray-200 text-gray-900 hover:border-purple-300'
-                                                        : 'bg-blue-50 border-blue-200 text-blue-700 cursor-default shadow-sm' 
+                                                        : 'bg-blue-50 border-blue-200 text-blue-700 cursor-default shadow-sm'
                                                     : selectedTable === tableNum
-                                                    ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-xl shadow-emerald-100 ring-4 ring-emerald-50'
-                                                    : 'bg-white border-gray-100 hover:border-blue-200 hover:bg-gray-50'
-                                                }`}
+                                                        ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-xl shadow-emerald-100 ring-4 ring-emerald-50'
+                                                        : 'bg-white border-gray-100 hover:border-blue-200 hover:bg-gray-50'
+                                                    }`}
                                             >
                                                 {assignedMatch ? (
                                                     <>
                                                         <span className="text-xl">⚔️</span>
                                                         <span className={`text-[10px] font-black uppercase leading-tight px-2 text-center ${modalMode === 'results' ? 'text-gray-900' : 'text-blue-700'}`}>
-                                                            {assignedMatch.p1_name.split(' ')[0]} <br/> vs <br/> {assignedMatch.p2_name.split(' ')[0]}
+                                                            {assignedMatch.p1_name.split(' ')[0]} <br /> vs <br /> {assignedMatch.p2_name.split(' ')[0]}
                                                         </span>
                                                         <div className={`absolute -top-2 -right-2 text-white text-[10px] w-6 h-6 rounded-lg flex items-center justify-center font-bold shadow-lg ${modalMode === 'results' ? 'bg-purple-600' : 'bg-blue-600'}`}>
                                                             {tableNum}
@@ -945,11 +996,10 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                                 setSelectedTable(null);
                                                             }
                                                         }}
-                                                        className={`w-full text-left p-4 rounded-2xl border transition-all flex flex-col gap-2 ${
-                                                            selectedTable 
-                                                            ? 'bg-white border-gray-200 hover:border-emerald-500 hover:shadow-lg hover:scale-[1.02] cursor-pointer' 
+                                                        className={`w-full text-left p-4 rounded-2xl border transition-all flex flex-col gap-2 ${selectedTable
+                                                            ? 'bg-white border-gray-200 hover:border-emerald-500 hover:shadow-lg hover:scale-[1.02] cursor-pointer'
                                                             : 'bg-gray-100 border-transparent opacity-60 cursor-not-allowed'
-                                                        }`}
+                                                            }`}
                                                     >
                                                         <div className="flex items-center justify-between">
                                                             <span className="text-[10px] font-bold text-blue-600 px-2 py-0.5 bg-blue-50 rounded italic">Round {match.round_number}</span>
@@ -971,7 +1021,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         {!selectedTable && matches.filter(m => !m.scheduled_at && m.status === MatchStatus.TABLE_PENDING).length > 0 && (
                                             <div className="p-4 bg-blue-50 border-t border-blue-100">
                                                 <p className="text-[10px] text-blue-700 font-bold text-center leading-tight">
-                                                    💡 Select a table on the map <br/> to assign a match
+                                                    💡 Select a table on the map <br /> to assign a match
                                                 </p>
                                             </div>
                                         )}
@@ -981,7 +1031,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                         {/* Header */}
                                         <div className="p-6 border-b border-gray-200 bg-white flex items-center gap-4">
                                             {resultEditMatch && (
-                                                <button 
+                                                <button
                                                     onClick={() => {
                                                         setResultEditMatch(null);
                                                         setScores({ p1: 0, p2: 0, draws: 0 });
@@ -1003,7 +1053,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
 
                                         {/* Sliding Viewport */}
                                         <div className="flex-1 relative overflow-hidden">
-                                            <div 
+                                            <div
                                                 className={`flex w-[200%] h-full transition-transform duration-500 cubic-bezier(0.4, 0, 0.2, 1) ${resultEditMatch ? '-translate-x-1/2' : 'translate-x-0'}`}
                                             >
                                                 {/* List View (Slide 1) */}
@@ -1011,14 +1061,13 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                     <h5 className="text-[10px] font-black uppercase tracking-widest text-gray-400">Ongoing Matches</h5>
                                                     <div className="space-y-3">
                                                         {matches.filter(m => m.scheduled_at && m.status === MatchStatus.ON_GOING).map(match => (
-                                                            <div 
+                                                            <div
                                                                 key={match.id}
                                                                 onClick={() => handleSelectMatchForResults(match)}
-                                                                className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
-                                                                    resultEditMatch?.id === match.id 
-                                                                    ? 'border-blue-600 bg-blue-50 shadow-md' 
+                                                                className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${resultEditMatch?.id === match.id
+                                                                    ? 'border-blue-600 bg-blue-50 shadow-md'
                                                                     : 'border-gray-100 hover:border-blue-200 bg-white hover:shadow-sm'
-                                                                }`}
+                                                                    }`}
                                                             >
                                                                 <div className="flex items-center justify-between mb-2">
                                                                     <span className="text-[10px] font-bold text-blue-600 px-2 py-0.5 bg-blue-50 rounded italic">Table {match.table_number}</span>
@@ -1050,53 +1099,52 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                                 <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                                                                     <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">{resultEditMatch.p1_name} Wins</label>
                                                                     <div className="flex items-center gap-4">
-                                                                        <button onClick={() => setScores({...scores, p1: Math.max(0, scores.p1 - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
-                                                                        <input 
-                                                                            type="number" 
+                                                                        <button onClick={() => setScores({ ...scores, p1: Math.max(0, scores.p1 - 1) })} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
+                                                                        <input
+                                                                            type="number"
                                                                             value={scores.p1}
-                                                                            onChange={e => setScores({...scores, p1: parseInt(e.target.value) || 0})}
+                                                                            onChange={e => setScores({ ...scores, p1: parseInt(e.target.value) || 0 })}
                                                                             className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
                                                                         />
-                                                                        <button onClick={() => setScores({...scores, p1: scores.p1 + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
+                                                                        <button onClick={() => setScores({ ...scores, p1: scores.p1 + 1 })} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
                                                                     </div>
                                                                 </div>
-                                                                
+
                                                                 <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                                                                     <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">{resultEditMatch.p2_name} Wins</label>
                                                                     <div className="flex items-center gap-4">
-                                                                        <button onClick={() => setScores({...scores, p2: Math.max(0, scores.p2 - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
-                                                                        <input 
-                                                                            type="number" 
+                                                                        <button onClick={() => setScores({ ...scores, p2: Math.max(0, scores.p2 - 1) })} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
+                                                                        <input
+                                                                            type="number"
                                                                             value={scores.p2}
-                                                                            onChange={e => setScores({...scores, p2: parseInt(e.target.value) || 0})}
+                                                                            onChange={e => setScores({ ...scores, p2: parseInt(e.target.value) || 0 })}
                                                                             className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
                                                                         />
-                                                                        <button onClick={() => setScores({...scores, p2: scores.p2 + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
+                                                                        <button onClick={() => setScores({ ...scores, p2: scores.p2 + 1 })} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
                                                                     </div>
                                                                 </div>
 
                                                                 <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100">
                                                                     <label className="block text-[10px] font-black text-gray-400 uppercase mb-2 leading-none">Draws</label>
                                                                     <div className="flex items-center gap-4">
-                                                                        <button onClick={() => setScores({...scores, draws: Math.max(0, scores.draws - 1)})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
-                                                                        <input 
-                                                                            type="number" 
+                                                                        <button onClick={() => setScores({ ...scores, draws: Math.max(0, scores.draws - 1) })} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">-</button>
+                                                                        <input
+                                                                            type="number"
                                                                             value={scores.draws}
-                                                                            onChange={e => setScores({...scores, draws: parseInt(e.target.value) || 0})}
+                                                                            onChange={e => setScores({ ...scores, draws: parseInt(e.target.value) || 0 })}
                                                                             className="flex-1 min-w-0 bg-transparent text-2xl font-black text-gray-900 text-center focus:outline-none"
                                                                         />
-                                                                        <button onClick={() => setScores({...scores, draws: scores.draws + 1})} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
+                                                                        <button onClick={() => setScores({ ...scores, draws: scores.draws + 1 })} className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center font-bold hover:border-purple-400 transition-colors">+</button>
                                                                     </div>
                                                                 </div>
                                                             </div>
 
-                                                            <button 
+                                                            <button
                                                                 onClick={handleSaveResults}
-                                                                className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${
-                                                                    pendingSaveResultId === resultEditMatch.id 
-                                                                    ? 'bg-red-600 text-white shadow-red-100 scale-105' 
+                                                                className={`w-full py-4 rounded-2xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${pendingSaveResultId === resultEditMatch.id
+                                                                    ? 'bg-red-600 text-white shadow-red-100 scale-105'
                                                                     : 'bg-purple-600 text-white shadow-purple-100 hover:bg-purple-700'
-                                                                }`}
+                                                                    }`}
                                                             >
                                                                 <span>{pendingSaveResultId === resultEditMatch.id ? '🎯' : '💾'}</span>
                                                                 <span>{pendingSaveResultId === resultEditMatch.id ? 'Confirm?' : 'Save Results'}</span>
@@ -1105,7 +1153,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                                     ) : (
                                                         <div className="h-full flex flex-col items-center justify-center text-center opacity-30 px-6 py-20">
                                                             <span className="text-4xl mb-4">🎯</span>
-                                                            <p className="text-xs font-bold leading-tight uppercase tracking-tighter">Select a match to <br/> record results</p>
+                                                            <p className="text-xs font-bold leading-tight uppercase tracking-tighter">Select a match to <br /> record results</p>
                                                         </div>
                                                     )}
                                                 </div>
@@ -1135,7 +1183,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                             <div className="space-y-4">
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Player 1</label>
-                                    <select 
+                                    <select
                                         value={p1ManualMatch}
                                         onChange={e => setP1ManualMatch(e.target.value)}
                                         className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
@@ -1155,7 +1203,7 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
 
                                 <div className="space-y-2">
                                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest px-1">Player 2</label>
-                                    <select 
+                                    <select
                                         value={p2ManualMatch}
                                         onChange={e => setP2ManualMatch(e.target.value)}
                                         className="w-full p-4 rounded-xl border border-gray-200 bg-gray-50 text-gray-900 font-bold focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
@@ -1172,9 +1220,8 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                             <button
                                 onClick={handleCreateManualMatch}
                                 disabled={isCreatingManualMatch || !p1ManualMatch || !p2ManualMatch}
-                                className={`w-full py-4 rounded-xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${
-                                    isCreatingManualMatch ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-blue-100 hover:bg-blue-700'
-                                }`}
+                                className={`w-full py-4 rounded-xl font-black shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2 ${isCreatingManualMatch ? 'bg-gray-100 text-gray-400' : 'bg-blue-600 text-white shadow-blue-100 hover:bg-blue-700'
+                                    }`}
                             >
                                 {isCreatingManualMatch ? 'Creating...' : 'Create Match'}
                             </button>
@@ -1190,8 +1237,8 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                 <h3 className="text-2xl font-black text-gray-900">Tournament Timeline</h3>
                                 <p className="text-sm text-gray-500">Visualization of all matches by day and time segment</p>
                             </div>
-                            <button 
-                                onClick={() => setShowTimelineModal(false)} 
+                            <button
+                                onClick={() => setShowTimelineModal(false)}
                                 className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-all shadow-sm"
                             >
                                 ✕
@@ -1201,117 +1248,117 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                         <div className="flex-1 flex overflow-hidden">
                             <div className="flex-1 overflow-auto p-8 bg-gray-50/30">
                                 {(() => {
-                                    const pendingMatches = matches.filter(m => m.status === MatchStatus.TABLE_PENDING);
+                                    const timelineData = getTimelineData();
                                     return (
                                         <div className="space-y-12">
-                                            {getTimelineData().map(day => (
-                                    <div key={day.date} className="relative">
-                                        <h4 className="flex items-center gap-4 mb-6">
-                                            <span className="text-lg font-black text-gray-900">{day.formattedDate}</span>
-                                            <div className="h-px flex-1 bg-gray-200" />
-                                        </h4>
-                                        
-                                        <div className="flex gap-4 min-w-max pb-4">
-                                            {day.slots.map(slot => {
-                                                const slotMatches = matches.filter(m => m.scheduled_at === slot.start && m.status !== MatchStatus.CANCELED);
-                                                return (
-                                                    <div 
-                                                        key={slot.start} 
-                                                        className="w-80 flex-shrink-0 group/slot transition-all duration-200 rounded-2xl"
-                                                        onDragOver={(e) => {
-                                                            e.preventDefault();
-                                                            e.currentTarget.classList.add('bg-indigo-100/80');
-                                                            const inner = e.currentTarget.querySelector('.timeline-slot-inner');
-                                                            if (inner) {
-                                                                inner.classList.remove('border-gray-200');
-                                                                inner.classList.add('border-indigo-500', 'bg-white');
-                                                            }
-                                                        }}
-                                                        onDragLeave={(e) => {
-                                                            e.currentTarget.classList.remove('bg-indigo-100/80');
-                                                            const inner = e.currentTarget.querySelector('.timeline-slot-inner');
-                                                            if (inner) {
-                                                                inner.classList.add('border-gray-200');
-                                                                inner.classList.remove('border-indigo-500', 'bg-white');
-                                                            }
-                                                        }}
-                                                        onDrop={(e) => {
-                                                            e.preventDefault();
-                                                            e.currentTarget.classList.remove('bg-indigo-100/80');
-                                                            const inner = e.currentTarget.querySelector('.timeline-slot-inner');
-                                                            if (inner) {
-                                                                inner.classList.add('border-gray-200');
-                                                                inner.classList.remove('border-indigo-500', 'bg-white');
-                                                            }
-                                                            const matchId = e.dataTransfer.getData('matchId');
-                                                            if (matchId) handleRescheduleMatch(matchId, slot.start);
-                                                        }}
-                                                    >
-                                                        <div className="mb-3 px-2 flex items-center justify-between">
-                                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{slot.label.split(' - ')[0]}</span>
-                                                            <span className="h-px flex-1 mx-3 bg-gray-100" />
-                                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{slot.label.split(' - ')[1]}</span>
-                                                        </div>
-                                                        
-                                                        <div className="timeline-slot-inner bg-white/50 border-2 border-dashed border-gray-200 rounded-2xl p-3 min-h-[120px] space-y-3 transition-all duration-200">
-                                                            {slotMatches.map(match => (
-                                                                <div 
-                                                                    key={match.id}
-                                                                    draggable={match.status === MatchStatus.AWAITING_MATCH}
-                                                                    onDragStart={(e) => {
-                                                                        e.dataTransfer.setData('matchId', match.id);
-                                                                        e.dataTransfer.effectAllowed = 'move';
-                                                                        e.currentTarget.classList.add('opacity-50');
-                                                                    }}
-                                                                    onDragEnd={(e) => {
-                                                                        e.currentTarget.classList.remove('opacity-50');
-                                                                    }}
-                                                                    className={`p-4 rounded-xl border shadow-sm transition-all ${
-                                                                        match.status === MatchStatus.COMPLETE ? 'bg-green-50 border-green-200' :
-                                                                        match.status === MatchStatus.ON_GOING ? 'bg-blue-50 border-blue-200 ring-2 ring-blue-100' :
-                                                                        match.status === MatchStatus.AWAITING_MATCH ? 'bg-white border-gray-100 cursor-move hover:border-blue-300 hover:shadow-md active:scale-95' :
-                                                                        'bg-white border-gray-100'
-                                                                    }`}
-                                                                >
-                                                                    <div className="flex justify-between items-start mb-2">
-                                                                        <span className="text-[10px] font-bold text-gray-400 italic">Table {match.table_number}</span>
-                                                                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${
-                                                                            match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' :
-                                                                            match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700' :
-                                                                            'bg-gray-100 text-gray-500'
-                                                                        }`}>
-                                                                            {match.status.replace('_', ' ')}
-                                                                        </span>
-                                                                    </div>
-                                                                    <div className="space-y-1">
-                                                                        <div className="flex justify-between items-center">
-                                                                            <p className="text-xs font-black text-gray-800 truncate flex-1">{match.p1_name}</p>
-                                                                            <span className="text-xs font-black text-blue-600 ml-2">{match.p1_score}</span>
+                                            {timelineData.map(day => (
+                                                <div key={day.date} className="relative">
+                                                    <h4 className="flex items-center gap-4 mb-6">
+                                                        <span className="text-lg font-black text-gray-900">{day.formattedDate}</span>
+                                                        <div className="h-px flex-1 bg-gray-200" />
+                                                    </h4>
+
+                                                    <div className="overflow-x-auto pb-4 scrollbar-thin scrollbar-thumb-gray-200 scrollbar-track-transparent">
+                                                        <div className="flex gap-4 min-w-max">
+                                                            {day.slots.map(slot => {
+                                                                const slotMatches = matches.filter(m => m.scheduled_at === slot.start && m.status !== MatchStatus.CANCELED);
+                                                                const rowCount = Math.ceil(Math.sqrt(slotMatches.length)) || 1;
+                                                                const higlightClass = 'bg-indigo-50/100';
+
+                                                                return (
+                                                                    <div
+                                                                        key={slot.start}
+                                                                        className="flex flex-col gap-3 min-w-[20rem]"
+                                                                        onDragOver={(e) => {
+                                                                            e.preventDefault();
+                                                                            e.currentTarget.classList.add(higlightClass, 'rounded-2xl');
+                                                                        }}
+                                                                        onDragLeave={(e) => {
+                                                                            e.currentTarget.classList.remove(higlightClass, 'rounded-2xl');
+                                                                        }}
+                                                                        onDrop={(e) => {
+                                                                            e.preventDefault();
+                                                                            e.currentTarget.classList.remove(higlightClass, 'rounded-2xl');
+                                                                            const matchId = e.dataTransfer.getData('matchId');
+                                                                            if (matchId) handleRescheduleMatch(matchId, slot.start);
+                                                                        }}
+                                                                    >
+                                                                        <div className="flex items-center gap-3 px-2">
+                                                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{slot.label.split(' - ')[0]}</span>
+                                                                            <div className="h-px flex-1 bg-gray-100" />
+                                                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{slot.label.split(' - ')[1]}</span>
                                                                         </div>
-                                                                        <div className="h-px bg-gray-50 w-full" />
-                                                                        <div className="flex justify-between items-center">
-                                                                            <p className="text-xs font-black text-gray-800 truncate flex-1">{match.p2_name}</p>
-                                                                            <span className="text-xs font-black text-blue-600 ml-2">{match.p2_score}</span>
+
+                                                                        <div
+                                                                            className="grid gap-4 p-2 min-h-[140px] items-start transition-all"
+                                                                            style={{
+                                                                                gridTemplateRows: `repeat(${rowCount}, auto)`,
+                                                                                gridAutoFlow: 'column',
+                                                                                gridAutoColumns: 'min-content'
+                                                                            }}
+                                                                        >
+                                                                            {slotMatches.map(match => (
+                                                                                <div
+                                                                                    key={match.id}
+                                                                                    draggable={match.status === MatchStatus.AWAITING_MATCH}
+                                                                                    onDragStart={(e) => {
+                                                                                        e.dataTransfer.setData('matchId', match.id);
+                                                                                        e.dataTransfer.effectAllowed = 'move';
+                                                                                        e.currentTarget.classList.add('opacity-50');
+                                                                                    }}
+                                                                                    onDragEnd={(e) => {
+                                                                                        e.currentTarget.classList.remove('opacity-50');
+                                                                                    }}
+                                                                                    className={`w-80 flex-shrink-0 p-4 rounded-xl border shadow-sm transition-all ${match.status === MatchStatus.COMPLETE ? 'bg-green-50 border-green-200 ring-2 ring-green-500/20' :
+                                                                                        match.status === MatchStatus.ON_GOING ? 'bg-blue-100/50 border-blue-400 ring-2 ring-blue-500/20' :
+                                                                                            match.status === MatchStatus.AWAITING_MATCH ? 'bg-white border-gray-100 cursor-move hover:border-blue-400 hover:shadow-md active:scale-95' :
+                                                                                                'bg-white border-gray-100'
+                                                                                        }`}
+                                                                                >
+                                                                                    <div className="flex justify-between items-start mb-2">
+                                                                                        <span className="text-[10px] font-bold text-gray-400 italic">Table {match.table_number}</span>
+                                                                                        <span className={`text-[8px] font-black uppercase px-2 py-0.5 rounded ${match.status === MatchStatus.COMPLETE ? 'bg-green-100 text-green-700' :
+                                                                                            match.status === MatchStatus.ON_GOING ? 'bg-blue-100 text-blue-700' :
+                                                                                                'bg-gray-100 text-gray-500'
+                                                                                            }`}>
+                                                                                            {match.status.replace('_', ' ')}
+                                                                                        </span>
+                                                                                    </div>
+                                                                                    <div className="space-y-1">
+                                                                                        <div className="flex justify-between items-center">
+                                                                                            <p className="text-xs font-black text-gray-800 truncate flex-1">{match.p1_name}</p>
+                                                                                            <span className="text-xs font-black text-blue-600 ml-2">{match.p1_score}</span>
+                                                                                        </div>
+                                                                                        <div className="h-px bg-gray-50 w-full" />
+                                                                                        <div className="flex justify-between items-center">
+                                                                                            <p className="text-xs font-black text-gray-800 truncate flex-1">{match.p2_name}</p>
+                                                                                            <span className="text-xs font-black text-blue-600 ml-2">{match.p2_score}</span>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            ))}
+                                                                            {slotMatches.length === 0 && (
+                                                                                <div className="h-24 w-40 flex items-center justify-center opacity-10 border-2 border-dashed border-gray-400 rounded-xl">
+                                                                                    <span className="text-2xl">☕</span>
+                                                                                </div>
+                                                                            )}
                                                                         </div>
                                                                     </div>
-                                                                </div>
-                                                            ))}
-                                                            {slotMatches.length === 0 && (
-                                                                <div className="h-full flex items-center justify-center opacity-20">
-                                                                    <span className="text-2xl">☕</span>
+                                                                );
+                                                            })}
+                                                            {day.slots.every(slot => matches.filter(m => m.scheduled_at === slot.start && m.status !== MatchStatus.CANCELED).length === 0) && (
+                                                                <div className="flex items-center justify-center p-12 bg-white/50 border-2 border-dashed border-gray-200 rounded-2xl w-full">
+                                                                    <span className="text-2xl opacity-20 italic">No matches scheduled for this day ☕</span>
                                                                 </div>
                                                             )}
                                                         </div>
                                                     </div>
-                                                );
-                                            })}
-                                        </div>
-                                    </div>
-                                ))}
-                                            {getTimelineData().length === 0 && (
+                                                </div>
+                                            ))}
+                                            {timelineData.length === 0 && (
                                                 <div className="text-center py-20 bg-white rounded-3xl border-2 border-dashed border-gray-100">
-                                                     <span className="text-4xl mb-4 block">📅</span>
-                                                     <p className="text-gray-400 italic">No time slots scheduled yet.</p>
+                                                    <span className="text-4xl mb-4 block">📅</span>
+                                                    <p className="text-gray-400 italic">No time slots scheduled yet.</p>
                                                 </div>
                                             )}
                                         </div>
@@ -1329,20 +1376,20 @@ export default function TournamentDetailPage({ params }: { params: Promise<{ id:
                                             <span className="text-[10px] font-bold text-amber-500 px-2 py-0.5 bg-amber-50 rounded-full border border-amber-100">Pending</span>
                                         </div>
                                     </div>
-                                    
+
                                     <div className="space-y-4">
                                         {matches.filter(m => m.status === MatchStatus.TABLE_PENDING).map(match => (
-                                            <div 
+                                            <div
                                                 key={match.id}
                                                 draggable
                                                 onDragStart={(e) => {
                                                     e.dataTransfer.setData('matchId', match.id);
                                                     e.dataTransfer.effectAllowed = 'move';
                                                     e.currentTarget.classList.add('opacity-50', 'scale-95');
-                                                } }
+                                                }}
                                                 onDragEnd={(e) => {
                                                     e.currentTarget.classList.remove('opacity-50', 'scale-95');
-                                                } }
+                                                }}
                                                 className="p-4 rounded-2xl border border-gray-100 bg-white shadow-sm hover:border-blue-300 hover:shadow-md transition-all cursor-move active:scale-95 group relative overflow-hidden"
                                             >
                                                 <div className="absolute top-0 left-0 w-1 h-full bg-amber-400" />
