@@ -9,8 +9,14 @@ export default function CustomCardModal({ onClose, onCreate }: { onClose: () => 
     };
 
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+        <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-50 p-4 cursor-pointer"
+            onClick={onClose}
+        >
+            <div 
+                className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 cursor-default"
+                onClick={(e) => e.stopPropagation()}
+            >
                 <h2 className="text-lg font-bold text-gray-900 mb-2">Create Custom Card</h2>
                 <p className="text-sm text-gray-600 mb-4">
                     Add a card that doesn't exist in the database.

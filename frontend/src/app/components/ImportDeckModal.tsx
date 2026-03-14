@@ -12,8 +12,14 @@ interface ImportModalProps {
 
 export default function ImportDeckModal({ onClose, onImport, importText, setImportText, importError, setImportError, importProgress, setImportProgress, saving }: ImportModalProps) {
     return (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6">
+        <div 
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm flex justify-center items-center z-50 p-4 cursor-pointer"
+            onClick={onClose}
+        >
+            <div 
+                className="bg-white rounded-lg shadow-xl max-w-lg w-full p-6 cursor-default"
+                onClick={(e) => e.stopPropagation()}
+            >
                 <h2 className="text-lg font-bold text-gray-900 mb-2">Import Decklist</h2>
                 <p className="text-sm text-gray-600 mb-4">
                     Paste your decklist below. Supports formats like <code className="bg-gray-100 px-1 rounded">4 Lightning Bolt</code> or <code className="bg-gray-100 px-1 rounded">4x Lightning Bolt</code>.

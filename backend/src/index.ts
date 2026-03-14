@@ -549,7 +549,7 @@ router.get('/api/decks/:id', async (request, env: Env) => {
 		const deckId = request.params.id;
 
 		const deck: any = await env.DB.prepare(
-			`SELECT * FROM decks WHERE id = ? AND user_id = ?`
+			`SELECT id, user_id, name, description, created_at, updated_at, custom_categories FROM decks WHERE id = ? AND user_id = ?`
 		).bind(deckId, user.user_id).first();
 
 		if (!deck) return error(404, 'Deck not found');
@@ -576,12 +576,12 @@ router.put('/api/decks/:id', async (request, env: Env) => {
 		if (!user) return error(401, 'Not authenticated');
 
 		const deckId = request.params.id;
-		const { name, description } = await request.json() as any;
+		const { name, description, custom_categories } = await request.json() as any;
 
 		const result = await env.DB.prepare(
-			`UPDATE decks SET name = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+			`UPDATE decks SET name = ?, description = ?, custom_categories = ?, updated_at = CURRENT_TIMESTAMP
 			 WHERE id = ? AND user_id = ?`
-		).bind(name, description || null, deckId, user.user_id).run();
+		).bind(name, description || null, custom_categories || null, deckId, user.user_id).run();
 
 		if (result.meta.changes === 0) return error(404, 'Deck not found');
 

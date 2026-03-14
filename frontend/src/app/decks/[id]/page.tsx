@@ -49,7 +49,7 @@ export default function DeckEditorPage() {
     const [showCustomCardModal, setShowCustomCardModal] = useState(false);
     const [showSearchModal, setShowSearchModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
-    const [gridScale, setGridScale] = useState(1.7);
+    const [gridScale, setGridScale] = useState(1.95);
 
     const [customCategories, setCustomCategories] = useState<string[]>([]);
     const [isAddingCategory, setIsAddingCategory] = useState(false);
@@ -77,6 +77,13 @@ export default function DeckEditorPage() {
             if (data.success) {
                 setDeck(data.deck);
                 setNameValue(data.deck.name);
+                if (data.deck.custom_categories) {
+                    try {
+                        setCustomCategories(JSON.parse(data.deck.custom_categories));
+                    } catch (e) {
+                        console.error('Failed to parse custom categories:', e);
+                    }
+                }
             } else {
                 setError(data.error || 'Failed to load deck');
             }
@@ -380,9 +387,10 @@ export default function DeckEditorPage() {
             if (!groups[cat]) groups[cat] = [];
         });
 
-        // Remove ALL empty groups (automatic AND custom)
+        // Remove empty groups ONLY if they are default categories (automatic)
+        // Keep empty custom categories so the user can see/use them
         Object.keys(groups).forEach(key => {
-            if (groups[key].length === 0) {
+            if (groups[key].length === 0 && !customCategories.includes(key)) {
                 delete groups[key];
             }
         });
@@ -390,12 +398,30 @@ export default function DeckEditorPage() {
         return groups;
     }, [deck?.cards, customCategories]);
 
-    const handleConfirmAddCategory = () => {
+    const handleConfirmAddCategory = async () => {
         const name = newCategoryName.trim();
         if (name) {
             if (!customCategories.includes(name)) {
-                setCustomCategories(prev => [...prev, name]);
-                addToast(`Created category "${name}"`, 'success');
+                const updated = [...customCategories, name];
+                setCustomCategories(updated);
+                
+                // Persist to backend
+                try {
+                    await fetch(`${apiUrl}/api/decks/${deckId}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ 
+                            name: deck?.name, 
+                            description: deck?.description,
+                            custom_categories: JSON.stringify(updated)
+                        })
+                    });
+                    addToast(`Created category "${name}"`, 'success');
+                } catch (err) {
+                    console.error('Failed to save category:', err);
+                    addToast('Failed to save category to database', 'error');
+                }
             }
             setNewCategoryName('');
             setIsAddingCategory(false);
@@ -521,7 +547,7 @@ export default function DeckEditorPage() {
             if (targetCategory && targetCategory !== card.category) {
                 // Debounce the actual API call
                 if (categoryDebounceTimer.current) clearTimeout(categoryDebounceTimer.current);
-                
+
                 // Immediately update local UI for snappiness
                 setDeck(prev => {
                     if (!prev) return null;
@@ -672,7 +698,7 @@ export default function DeckEditorPage() {
         <main className="min-h-screen">
             {/* Header */}
             <div className="bg-white border-b border-gray-200 px-8 py-4">
-                <div className="max-w-5xl mx-auto flex items-center justify-between">
+                <div className="w-full px-8 flex items-center justify-between">
                     <div className="flex items-center gap-4">
                         <Link href="/decks" className="text-gray-500 hover:text-gray-700 transition-colors text-sm">
                             ← Decks
@@ -706,7 +732,7 @@ export default function DeckEditorPage() {
                 </div>
             </div>
 
-            <div className="max-w-5xl mx-auto p-8">
+            <div className="w-full p-8">
                 {/* Actions Bar */}
                 <div className="flex items-center gap-3 mb-6">
                     <button
@@ -736,9 +762,53 @@ export default function DeckEditorPage() {
                     >
                         🔗 Share Portable Link
                     </button>
+
+                    <div className={`relative h-9 transition-all duration-300 ${isAddingCategory ? 'w-64' : 'w-40'} ml-auto`}>
+                        {/* Compact Add Button */}
+                        <div className={`absolute inset-0 transition-all duration-300 ${!isAddingCategory ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-75 invisible pointer-events-none'}`}>
+                            <button
+                                onClick={() => setIsAddingCategory(true)}
+                                className="w-full h-full flex items-center justify-center gap-2 px-3 bg-white border border-gray-200 rounded-md text-gray-600 hover:text-blue-500 hover:border-blue-300 hover:bg-blue-50 transition-all group shadow-sm text-xs font-bold uppercase tracking-wider"
+                            >
+                                <span className="text-lg">+</span>
+                                <span>Add Category</span>
+                            </button>
+                        </div>
+
+                        {/* Compact Input Box */}
+                        <div className={`absolute inset-0 transition-all duration-300 ${isAddingCategory ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-95 invisible pointer-events-none'}`}>
+                            <div className="flex items-center gap-1 bg-white border border-blue-500 rounded-md p-0.5 shadow-md h-full">
+                                <input
+                                    autoFocus={isAddingCategory}
+                                    type="text"
+                                    placeholder="Category name..."
+                                    value={newCategoryName}
+                                    onChange={(e) => setNewCategoryName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter') handleConfirmAddCategory();
+                                        if (e.key === 'Escape') setIsAddingCategory(false);
+                                    }}
+                                    className="flex-1 px-2 text-xs font-semibold outline-none bg-transparent text-gray-800 placeholder:text-gray-400"
+                                />
+                                <button
+                                    onClick={handleConfirmAddCategory}
+                                    className="bg-blue-600 text-white w-7 h-7 rounded flex items-center justify-center hover:bg-blue-700 active:scale-95 transition-all"
+                                >
+                                    <span className="font-bold pb-0.5">›</span>
+                                </button>
+                                <button
+                                    onClick={() => setIsAddingCategory(false)}
+                                    className="bg-red-400 text-red-1000 w-7 h-7 rounded flex items-center justify-center hover:bg-red-500 active:scale-95 transition-all"
+                                >
+                                    ✕
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
                     <button
                         onClick={() => setShowSearchModal(true)}
-                        className="bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer ml-auto"
+                        className="bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
                     >
                         🔍 Search Cards
                     </button>
@@ -748,15 +818,15 @@ export default function DeckEditorPage() {
                         {viewMode === 'grid' && (
                             <div className="flex items-center gap-2 bg-white/40 px-1 py-1 rounded-lg border border-white/40 shadow-sm mr-2">
                                 <button
-                                    onClick={() => setGridScale(1.7)}
-                                    className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.0 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600 hover:bg-white/20'}`}
+                                    onClick={() => setGridScale(1.95)}
+                                    className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.1 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600 hover:bg-white/20'}`}
                                     title="Default Zoom"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
                                 </button>
                                 <button
                                     onClick={() => setGridScale(2.3)}
-                                    className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.0 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600 hover:bg-white/20'}`}
+                                    className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.1 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600 hover:bg-white/20'}`}
                                     title="Large Zoom"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
@@ -837,22 +907,22 @@ export default function DeckEditorPage() {
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
                                                 {cards.map((card, idx) => (
-                                        <CardRow
-                                            key={card.id}
-                                            card={card}
-                                            index={idx}
-                                            isFirst={idx === 0}
-                                            isLast={idx === cards.length - 1}
-                                            onUpdate={handleUpdateCard}
-                                            onDelete={handleDeleteCard}
-                                            onMove={handleMoveCard}
-                                            animateY={0}
-                                            rowRefs={rowRefs}
-                                            scryfallCache={scryfallCache}
-                                            onDragStart={handleDragStart}
-                                            onHover={() => setHoveredCardId(card.id)}
-                                            onLeave={() => setHoveredCardId(null)}
-                                        />
+                                                    <CardRow
+                                                        key={card.id}
+                                                        card={card}
+                                                        index={idx}
+                                                        isFirst={idx === 0}
+                                                        isLast={idx === cards.length - 1}
+                                                        onUpdate={handleUpdateCard}
+                                                        onDelete={handleDeleteCard}
+                                                        onMove={handleMoveCard}
+                                                        animateY={0}
+                                                        rowRefs={rowRefs}
+                                                        scryfallCache={scryfallCache}
+                                                        onDragStart={handleDragStart}
+                                                        onHover={() => setHoveredCardId(card.id)}
+                                                        onLeave={() => setHoveredCardId(null)}
+                                                    />
                                                 ))}
                                             </tbody>
                                         </table>
@@ -875,51 +945,6 @@ export default function DeckEditorPage() {
                                 </div>
                             </div>
                         ))}
-
-                        <div className="flex justify-center pt-8 pb-12 min-h-[100px]">
-                            <div className={`relative h-[72px] transition-all duration-500 ease-in-out w-full ${isAddingCategory ? 'max-w-md' : 'max-w-[288px]'}`}>
-                                {/* The "Add New" Button */}
-                                <div className={`absolute inset-0 transition-all duration-500 ${!isAddingCategory ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-75 invisible pointer-events-none'}`}>
-                                    <button
-                                        onClick={() => setIsAddingCategory(true)}
-                                        className="w-full h-full flex items-center justify-center gap-3 px-6 bg-white border-2 border-dashed border-gray-300 rounded-2xl text-gray-400 hover:text-blue-500 hover:border-blue-400 hover:bg-blue-50/50 transition-all group shadow-sm hover:shadow-md"
-                                    >
-                                        <span className="text-2xl font-light group-hover:rotate-90 transition-transform duration-300">+</span>
-                                        <span className="font-bold text-xs tracking-widest uppercase">Add New Category</span>
-                                    </button>
-                                </div>
-
-                                {/* The Animated Input Box */}
-                                <div className={`absolute inset-0 transition-all duration-500 ${isAddingCategory ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-95 invisible pointer-events-none translate-y-2'}`}>
-                                    <div className="flex items-center gap-2 bg-white border-2 border-blue-500 rounded-2xl p-1.5 shadow-xl ring-2 ring-blue-50 h-full">
-                                        <input
-                                            autoFocus={isAddingCategory}
-                                            type="text"
-                                            placeholder="Enter category name..."
-                                            value={newCategoryName}
-                                            onChange={(e) => setNewCategoryName(e.target.value)}
-                                            onKeyDown={(e) => {
-                                                if (e.key === 'Enter') handleConfirmAddCategory();
-                                                if (e.key === 'Escape') setIsAddingCategory(false);
-                                            }}
-                                            className="flex-1 px-4 py-2 text-base font-semibold outline-none bg-transparent text-gray-800 placeholder:text-gray-400"
-                                        />
-                                        <button
-                                            onClick={handleConfirmAddCategory}
-                                            className="bg-blue-600 text-white w-11 h-11 rounded-xl flex items-center justify-center hover:bg-blue-700 active:scale-95 transition-all shadow-md"
-                                        >
-                                            <span className="text-2xl font-bold leading-none pb-2">›</span>
-                                        </button>
-                                        <button
-                                            onClick={() => setIsAddingCategory(false)}
-                                            className="bg-red-200 text-red-500 w-11 h-11 rounded-xl flex items-center justify-center hover:bg-red-100 active:scale-95 transition-all shadow-sm"
-                                        >
-                                            ✕
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                 )}
             </div>
@@ -944,8 +969,14 @@ export default function DeckEditorPage() {
             )}
 
             {showSearchModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="w-full max-w-6xl max-h-[90vh] flex flex-col">
+                <div
+                    className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 cursor-pointer"
+                    onClick={() => setShowSearchModal(false)}
+                >
+                    <div
+                        className="w-full max-w-6xl max-h-[90vh] flex flex-col cursor-default"
+                        onClick={(e) => e.stopPropagation()}
+                    >
                         <CardSearcher
                             onSyncQuantity={handleSyncCardQuantity}
                             onClose={() => setShowSearchModal(false)}
@@ -973,9 +1004,9 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
 
     return (
         <div
-            className="grid gap-2 p-2"
+            className="flex gap-4 p-4 overflow-x-auto overflow-y-hidden custom-scrollbar pb-6"
             style={{
-                gridTemplateColumns: `repeat(auto-fill, minmax(${cardWidth}px, 1fr))`
+                minHeight: Math.round(150 * scale) // Ensure container doesn't collapse during loading/empty
             }}
         >
             {cards.map(card => (
@@ -1047,7 +1078,8 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart,
             onDragStart={(e) => onDragStart(e, card)}
             onMouseEnter={onHover}
             onMouseLeave={onLeave}
-            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing"
+            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing flex-shrink-0"
+            style={{ width: Math.round(100 * scale) }}
         >
             {/* Image Container */}
             <div className="aspect-[63/88] bg-gray-50 relative overflow-hidden flex items-center justify-center">

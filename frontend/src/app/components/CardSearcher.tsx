@@ -30,7 +30,7 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
     const [results, setResults] = useState<ScryfallCard[]>([]);
     const [loading, setLoading] = useState(false);
     const [touched, setTouched] = useState(false);
-    const [gridScale, setGridScale] = useState(1.85);
+    const [gridScale, setGridScale] = useState(2.15);
 
     // localQuantities tracks the visual state, including non-synced changes
     const [localQuantities, setLocalQuantities] = useState<Record<string, number>>({});
@@ -117,15 +117,15 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                         </h2>
                         <div className="flex items-center gap-2 bg-white/40 px-1 py-1 rounded-lg border border-white/40 shadow-sm ml-4">
                             <button
-                                onClick={() => setGridScale(1.85)}
-                                className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.2 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                onClick={() => setGridScale(2.15)}
+                                className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.3 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                                 title="Default Size"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
                             </button>
                             <button
                                 onClick={() => setGridScale(2.45)}
-                                className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.2 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.3 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                                 title="Zoomed Size"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
