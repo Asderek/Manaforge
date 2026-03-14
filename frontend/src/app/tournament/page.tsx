@@ -16,7 +16,7 @@ export default function TournamentPage() {
     useEffect(() => {
         const fetchStats = async () => {
             try {
-                const res = await fetch(`${apiUrl}/api/tournaments/dashboard-stats`, {
+                const res = await fetch(`${apiUrl}/api/stats/tournament-dashboard`, {
                     credentials: 'include'
                 });
                 const data = await res.json();

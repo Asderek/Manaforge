@@ -795,7 +795,7 @@ router.delete('/api/players/:id', async (request, env: Env) => {
 // Tournaments CRUD
 // ──────────────────────────────────────────────
 
-router.get('/api/tournaments/dashboard-stats', async (request, env: Env) => {
+router.get('/api/stats/tournament-dashboard', async (request, env: Env) => {
 	const user = await getSessionUser(request, env);
 	if (!user) return error(401, 'Unauthorized');
 
