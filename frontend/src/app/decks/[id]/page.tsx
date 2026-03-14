@@ -198,7 +198,7 @@ export default function DeckEditorPage() {
     };
 
     // ── Card Editing ──
-    const handleUpdateCard = async (card: Card, updates: Partial<Card>) => {
+    const handleUpdateCard = useCallback(async (card: Card, updates: Partial<Card>) => {
         const updated = { ...card, ...updates };
         try {
             const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards/${card.id}`, {
@@ -220,9 +220,9 @@ export default function DeckEditorPage() {
         } catch (err: any) {
             alert(err.message);
         }
-    };
+    }, [apiUrl, deckId]);
 
-    const handleDeleteCard = async (cardId: string) => {
+    const handleDeleteCard = useCallback(async (cardId: string) => {
         try {
             const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards/${cardId}`, {
                 method: 'DELETE',
@@ -238,7 +238,7 @@ export default function DeckEditorPage() {
         } catch (err: any) {
             alert(err.message);
         }
-    };
+    }, [apiUrl, deckId]);
 
     // ── Sort ──
     const handleMoveCard = async (card: Card, direction: 'up' | 'down') => {
@@ -346,7 +346,7 @@ export default function DeckEditorPage() {
         return counts;
     }, [deck?.cards]);
 
-    const handleSyncCardQuantity = async (cardName: string, newQuantity: number) => {
+    const handleSyncCardQuantity = useCallback(async (cardName: string, newQuantity: number) => {
         const existingCard = deck?.cards.find(c => c.card_name === cardName);
 
         if (newQuantity === 0) {
@@ -380,7 +380,85 @@ export default function DeckEditorPage() {
                 setSaving(false);
             }
         }
-    };
+    }, [deck, apiUrl, deckId, handleDeleteCard, handleUpdateCard, fetchDeck, addToast]);
+
+    // ── Clipboard & Drag-Drop Import ──
+    useEffect(() => {
+        const processLinks = async (text: string) => {
+            if (!text) return;
+
+            // Look for any scryfall or edhrec links
+            // Pattern matches the domain and captures everything until a space or end of string
+            const linkRegex = /(?:https?:\/\/)?(?:www\.)?(scryfall\.com|edhrec\.com)\/[^\s]+/gi;
+            const linkMatches = text.match(linkRegex);
+
+            if (!linkMatches || linkMatches.length === 0) return;
+
+            const extractedNames: string[] = [];
+            for (const link of linkMatches) {
+                try {
+                    // Extract the last part of the path, removing query params
+                    const url = new URL(link.startsWith('http') ? link : `https://${link}`);
+                    const pathParts = url.pathname.split('/').filter(p => p.length > 0);
+                    if (pathParts.length > 0) {
+                        const slug = pathParts[pathParts.length - 1];
+                        extractedNames.push(slug.replace(/-/g, ' '));
+                    }
+                } catch (err) {
+                    console.error('URL parse error:', err);
+                }
+            }
+
+            const uniqueNames = Array.from(new Set(extractedNames));
+            if (uniqueNames.length === 0) return;
+
+            addToast(`Importing ${uniqueNames.length} card(s) from link(s)...`, 'info');
+            
+            for (const name of uniqueNames) {
+                try {
+                    const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
+                    if (res.ok) {
+                        const data = await res.json();
+                        const scryfallName = data.name;
+                        await handleSyncCardQuantity(scryfallName, 1);
+                    } else {
+                        addToast(`Card "${name}" not found.`, 'error');
+                    }
+                } catch (err) {
+                    console.error('Import error:', err);
+                }
+                // Rate limit protection
+                await new Promise(r => setTimeout(r, 100));
+            }
+        };
+
+        const handlePaste = (e: ClipboardEvent) => {
+            const target = e.target as HTMLElement;
+            if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+            const text = e.clipboardData?.getData('text');
+            if (text) processLinks(text);
+        };
+
+        const handleDrop = (e: DragEvent) => {
+            e.preventDefault();
+            const text = e.dataTransfer?.getData('text');
+            if (text) processLinks(text);
+        };
+
+        const handleDragOver = (e: DragEvent) => {
+            e.preventDefault(); // Required to allow drop
+        };
+
+        window.addEventListener('paste', handlePaste);
+        window.addEventListener('drop', handleDrop);
+        window.addEventListener('dragover', handleDragOver);
+
+        return () => {
+            window.removeEventListener('paste', handlePaste);
+            window.removeEventListener('drop', handleDrop);
+            window.removeEventListener('dragover', handleDragOver);
+        };
+    }, [addToast, handleSyncCardQuantity]);
 
 
     const handleShare = () => {
