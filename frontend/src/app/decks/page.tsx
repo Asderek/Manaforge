@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { useToast } from '../components/Toast';
 
 type Deck = {
     id: string;
@@ -20,8 +21,10 @@ export default function DecksPage() {
     const [showNewForm, setShowNewForm] = useState(false);
     const [newName, setNewName] = useState('');
     const [creating, setCreating] = useState(false);
+    const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
+    const { addToast } = useToast();
 
     useEffect(() => {
         const fetchDecks = async () => {
@@ -66,21 +69,45 @@ export default function DecksPage() {
         }
     };
 
-    const handleDeleteDeck = async (deckId: string) => {
-        if (!confirm('Are you sure you want to delete this deck? This cannot be undone.')) return;
+    const handleDeleteDeck = async (id: string) => {
+        if (pendingDeleteId !== id) {
+            setPendingDeleteId(id);
+            addToast('Click again to delete', 'warning');
+            setTimeout(() => setPendingDeleteId(null), 3000);
+            return;
+        }
+
         try {
-            const res = await fetch(`${apiUrl}/api/decks/${deckId}`, {
+            const res = await fetch(`${apiUrl}/api/decks/${id}`, {
                 method: 'DELETE',
                 credentials: 'include'
             });
             const data = await res.json();
             if (data.success) {
-                setDecks(prev => prev.filter(d => d.id !== deckId));
+                setDecks(prev => prev.filter(d => d.id !== id));
+                addToast('Deck deleted', 'success');
+                setPendingDeleteId(null);
             }
-        } catch (err: any) {
-            alert(err.message);
+        } catch (err) {
+            addToast('Error deleting deck', 'error');
+            setPendingDeleteId(null);
         }
     };
+    // const handleDeleteDeck = async (deckId: string) => {
+    //     if (!confirm('Are you sure you want to delete this deck? This cannot be undone.')) return;
+    //     try {
+    //         const res = await fetch(`${apiUrl}/api/decks/${deckId}`, {
+    //             method: 'DELETE',
+    //             credentials: 'include'
+    //         });
+    //         const data = await res.json();
+    //         if (data.success) {
+    //             setDecks(prev => prev.filter(d => d.id !== deckId));
+    //         }
+    //     } catch (err: any) {
+    //         alert(err.message);
+    //     }
+    // };
 
     if (loading) {
         return (
@@ -161,9 +188,9 @@ export default function DecksPage() {
                                     </Link>
                                     <button
                                         onClick={() => handleDeleteDeck(deck.id)}
-                                        className="text-red-400 hover:text-red-600 transition-colors text-sm font-medium ml-4"
+                                        className={`${pendingDeleteId === deck.id ? 'text-red-600 scale-110' : 'text-red-400'} hover:text-red-600 text-xs font-bold transition-all`}
                                     >
-                                        Delete
+                                        {pendingDeleteId === deck.id ? 'Confirm?' : 'Delete'}
                                     </button>
                                 </div>
                             </div>

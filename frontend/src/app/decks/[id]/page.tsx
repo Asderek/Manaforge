@@ -181,7 +181,12 @@ export default function DeckEditorPage() {
                     validatedCards.push({ card_name: scryfallName, quantity: card.quantity, category });
                     // Cache the image while we have it
                     const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
-                    scryfallCache.current[scryfallName] = imgUrl;
+                    //scryfallCache.current[scryfallName] = imgUrl;
+                    scryfallCache.current[card.card_name] = {
+                        ...scryfallCache.current[card.card_name],
+                        img: data.image_uris?.normal || data.image_uris?.small || null,
+                        typeLine: data.type_line
+                    };
                 } else {
                     warnings.push(`"${card.card_name}" not found on Scryfall — added as-is`);
                     validatedCards.push({ ...card, category: 'Uncategorized' });
@@ -404,15 +409,15 @@ export default function DeckEditorPage() {
             if (!customCategories.includes(name)) {
                 const updated = [...customCategories, name];
                 setCustomCategories(updated);
-                
+
                 // Persist to backend
                 try {
                     await fetch(`${apiUrl}/api/decks/${deckId}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         credentials: 'include',
-                        body: JSON.stringify({ 
-                            name: deck?.name, 
+                        body: JSON.stringify({
+                            name: deck?.name,
                             description: deck?.description,
                             custom_categories: JSON.stringify(updated)
                         })
@@ -694,6 +699,9 @@ export default function DeckEditorPage() {
         );
     }
 
+    // Put this right before your return statement
+    const hasSingleCategory = Object.keys(groupedCards).length === 1;
+
     return (
         <main className="min-h-screen">
             {/* Header */}
@@ -878,7 +886,13 @@ export default function DeckEditorPage() {
                         </button>
                     </div>
                 ) : (
-                    <div className={viewMode === 'grid' ? "grid grid-cols-1 xl:grid-cols-2 gap-8" : "space-y-8"}>
+                    <div
+                        className={
+                            viewMode === 'grid'
+                                ? `grid grid-cols-1 ${hasSingleCategory ? '' : 'xl:grid-cols-2'} gap-8`
+                                : "space-y-8"
+                        }
+                    >
                         {Object.entries(groupedCards).map(([category, cards]) => (
                             <div
                                 key={category}
@@ -1189,6 +1203,7 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
         }
         setPreviewLoading(true);
         try {
+            console.log(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
             const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
             if (res.ok) {
                 const data = await res.json();
