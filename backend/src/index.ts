@@ -555,7 +555,7 @@ router.get('/api/decks/:id', async (request, env: Env) => {
 		if (!deck) return error(404, 'Deck not found');
 
 		const { results: cards } = await env.DB.prepare(
-			`SELECT dc.*, cc.card_image as custom_image
+			`SELECT dc.id, dc.deck_id, dc.card_name, dc.quantity, dc.category, dc.sort_order, dc.created_at, cc.card_image as custom_image
 			 FROM deck_cards dc
 			 LEFT JOIN custom_cards cc ON dc.card_name = cc.card_name AND cc.user_id = ?
 			 WHERE dc.deck_id = ?
@@ -647,9 +647,9 @@ router.post('/api/decks/:id/cards', async (request, env: Env) => {
 		const stmts = cards.map((card: any) => {
 			const id = crypto.randomUUID();
 			const stmt = env.DB.prepare(
-				`INSERT INTO deck_cards (id, deck_id, card_name, quantity, sort_order)
-				 VALUES (?, ?, ?, ?, ?)`
-			).bind(id, deckId, card.card_name, card.quantity || 1, nextSort++);
+				`INSERT INTO deck_cards (id, deck_id, card_name, quantity, category, sort_order)
+				 VALUES (?, ?, ?, ?, ?, ?)`
+			).bind(id, deckId, card.card_name, card.quantity || 1, card.category || 'Uncategorized', nextSort++);
 			return stmt;
 		});
 
@@ -681,12 +681,12 @@ router.put('/api/decks/:id/cards/:cardId', async (request, env: Env) => {
 		).bind(deckId, user.user_id).first();
 		if (!deck) return error(404, 'Deck not found');
 
-		const { card_name, quantity, sort_order } = await request.json() as any;
+		const { card_name, quantity, category, sort_order } = await request.json() as any;
 
 		const result = await env.DB.prepare(
-			`UPDATE deck_cards SET card_name = ?, quantity = ?, sort_order = ?
+			`UPDATE deck_cards SET card_name = ?, quantity = ?, category = ?, sort_order = ?
 			 WHERE id = ? AND deck_id = ?`
-		).bind(card_name, quantity, sort_order, cardId, deckId).run();
+		).bind(card_name, quantity, category || 'Uncategorized', sort_order, cardId, deckId).run();
 
 		if (result.meta.changes === 0) return error(404, 'Card not found');
 

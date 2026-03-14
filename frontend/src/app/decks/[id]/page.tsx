@@ -14,6 +14,7 @@ type Card = {
     id: string;
     card_name: string;
     quantity: number;
+    category: string;
     sort_order: number;
     custom_image?: string | null;
 };
@@ -48,14 +49,22 @@ export default function DeckEditorPage() {
     const [showCustomCardModal, setShowCustomCardModal] = useState(false);
     const [showSearchModal, setShowSearchModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
-    const [gridScale, setGridScale] = useState(1.0);
+    const [gridScale, setGridScale] = useState(1.7);
+
+    const [customCategories, setCustomCategories] = useState<string[]>([]);
+    const [isAddingCategory, setIsAddingCategory] = useState(false);
+    const [newCategoryName, setNewCategoryName] = useState('');
 
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
     const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
-    // Scryfall image cache: card_name -> image URL
-    const scryfallCache = useRef<Record<string, string | null>>({});
+    // Tracking for keyboard shortcuts
+    const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+    const categoryDebounceTimer = useRef<NodeJS.Timeout | null>(null);
+
+    // Scryfall data cache: card_name -> { img: URL | null, typeLine?: string }
+    const scryfallCache = useRef<Record<string, { img: string | null; typeLine?: string }>>({});
 
     const { addToast } = useToast();
 
@@ -79,6 +88,20 @@ export default function DeckEditorPage() {
     }, [apiUrl, deckId]);
 
     useEffect(() => { fetchDeck(); }, [fetchDeck]);
+
+    // ── Category Utils ──
+    const getCategoryFromType = (typeLine: string): string => {
+        if (!typeLine) return 'Uncategorized';
+        const lower = typeLine.toLowerCase();
+        if (lower.includes('creature')) return 'Creatures';
+        if (lower.includes('instant')) return 'Instants';
+        if (lower.includes('sorcery')) return 'Sorceries';
+        if (lower.includes('enchantment')) return 'Enchantments';
+        if (lower.includes('artifact')) return 'Artifacts';
+        if (lower.includes('planeswalker')) return 'Planeswalkers';
+        if (lower.includes('land')) return 'Lands';
+        return 'Other';
+    };
 
     // ── Deck Name Editing ──
     const handleSaveName = async () => {
@@ -132,7 +155,7 @@ export default function DeckEditorPage() {
 
         setSaving(true);
         const warnings: string[] = [];
-        const validatedCards: { card_name: string; quantity: number }[] = [];
+        const validatedCards: { card_name: string; quantity: number; category: string }[] = [];
 
         // Validate each card against Scryfall
         for (let i = 0; i < parsed.length; i++) {
@@ -144,20 +167,21 @@ export default function DeckEditorPage() {
                 if (res.ok) {
                     const data = await res.json();
                     const scryfallName = data.name;
+                    const category = getCategoryFromType(data.type_line);
                     if (scryfallName.toLowerCase() !== card.card_name.toLowerCase()) {
                         warnings.push(`"${card.card_name}" not found — closest match "${scryfallName}" added`);
                     }
-                    validatedCards.push({ card_name: scryfallName, quantity: card.quantity });
+                    validatedCards.push({ card_name: scryfallName, quantity: card.quantity, category });
                     // Cache the image while we have it
                     const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
                     scryfallCache.current[scryfallName] = imgUrl;
                 } else {
                     warnings.push(`"${card.card_name}" not found on Scryfall — added as-is`);
-                    validatedCards.push(card);
+                    validatedCards.push({ ...card, category: 'Uncategorized' });
                 }
             } catch {
                 // Network error, just add as-is
-                validatedCards.push(card);
+                validatedCards.push({ ...card, category: 'Uncategorized' });
             }
 
             // Scryfall asks for 50-100ms between requests
@@ -205,7 +229,7 @@ export default function DeckEditorPage() {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ card_name: updated.card_name, quantity: updated.quantity, sort_order: updated.sort_order })
+                body: JSON.stringify({ card_name: updated.card_name, quantity: updated.quantity, category: updated.category, sort_order: updated.sort_order })
             });
             const data = await res.json();
             if (data.success) {
@@ -337,7 +361,61 @@ export default function DeckEditorPage() {
     };
 
     const totalCards = deck?.cards.reduce((sum, c) => sum + c.quantity, 0) ?? 0;
-    
+
+    const groupedCards = React.useMemo(() => {
+        const groups: Record<string, Card[]> = {};
+
+        // Ensure all default categories exist in order
+        const defaults = ['Creatures', 'Instants', 'Sorceries', 'Enchantments', 'Artifacts', 'Planeswalkers', 'Lands', 'Other'];
+        defaults.forEach(cat => groups[cat] = []);
+
+        deck?.cards.forEach(card => {
+            const cat = card.category || 'Uncategorized';
+            if (!groups[cat]) groups[cat] = [];
+            groups[cat].push(card);
+        });
+
+        // Add user created custom categories
+        customCategories.forEach(cat => {
+            if (!groups[cat]) groups[cat] = [];
+        });
+
+        // Remove ALL empty groups (automatic AND custom)
+        Object.keys(groups).forEach(key => {
+            if (groups[key].length === 0) {
+                delete groups[key];
+            }
+        });
+
+        return groups;
+    }, [deck?.cards, customCategories]);
+
+    const handleConfirmAddCategory = () => {
+        const name = newCategoryName.trim();
+        if (name) {
+            if (!customCategories.includes(name)) {
+                setCustomCategories(prev => [...prev, name]);
+                addToast(`Created category "${name}"`, 'success');
+            }
+            setNewCategoryName('');
+            setIsAddingCategory(false);
+        }
+    };
+
+    const handleDragStart = (e: React.DragEvent, card: Card) => {
+        e.dataTransfer.setData('cardId', card.id);
+    };
+
+    const handleDropOnCategory = async (e: React.DragEvent, targetCategory: string) => {
+        e.preventDefault();
+        const cardId = e.dataTransfer.getData('cardId');
+        const card = deck?.cards.find(c => c.id === cardId);
+        if (card && card.category !== targetCategory) {
+            await handleUpdateCard(card, { category: targetCategory });
+            addToast(`Moved ${card.card_name} to ${targetCategory}`, 'success');
+        }
+    };
+
     const cardQuantities = React.useMemo(() => {
         const counts: Record<string, number> = {};
         deck?.cards.forEach(c => {
@@ -346,7 +424,7 @@ export default function DeckEditorPage() {
         return counts;
     }, [deck?.cards]);
 
-    const handleSyncCardQuantity = useCallback(async (cardName: string, newQuantity: number) => {
+    const handleSyncCardQuantity = useCallback(async (cardName: string, newQuantity: number, typeLine?: string) => {
         const existingCard = deck?.cards.find(c => c.card_name === cardName);
 
         if (newQuantity === 0) {
@@ -363,16 +441,35 @@ export default function DeckEditorPage() {
         } else {
             setSaving(true);
             try {
+                // Determine category first to avoid "Uncategorized" race condition
+                let category = 'Uncategorized';
+                if (typeLine) {
+                    category = getCategoryFromType(typeLine);
+                } else {
+                    const scryRes = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(cardName)}`);
+                    if (scryRes.ok) {
+                        const scryData = await scryRes.json();
+                        category = getCategoryFromType(scryData.type_line);
+                        cardName = scryData.name; // Normalize name too
+                    }
+                }
+
                 const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'include',
-                    body: JSON.stringify({ cards: [{ card_name: cardName, quantity: newQuantity }] })
+                    body: JSON.stringify({
+                        cards: [{
+                            card_name: cardName,
+                            quantity: newQuantity,
+                            category: category
+                        }]
+                    })
                 });
                 const data = await res.json();
                 if (data.success) {
                     fetchDeck();
-                    addToast(`Added ${newQuantity}x ${cardName} to deck!`, 'success');
+                    addToast(`Added ${newQuantity}x ${cardName} to ${category}!`, 'success');
                 }
             } catch (err: any) {
                 addToast(err.message, 'error');
@@ -380,7 +477,70 @@ export default function DeckEditorPage() {
                 setSaving(false);
             }
         }
-    }, [deck, apiUrl, deckId, handleDeleteCard, handleUpdateCard, fetchDeck, addToast]);
+    }, [deck, apiUrl, deckId, handleDeleteCard, handleUpdateCard, fetchDeck, addToast, getCategoryFromType]);
+
+    // ── Keyboard Shortcuts Logic ──
+    useEffect(() => {
+        const handleKeyDown = async (e: KeyboardEvent) => {
+            // Ignore if in an input or modal
+            if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName) || showImport || showSearchModal || showCustomCardModal) {
+                return;
+            }
+
+            const key = e.key.toUpperCase();
+            if (!['A', 'S', 'M'].includes(key) || !hoveredCardId || !deck) return;
+
+            const card = deck.cards.find(c => c.id === hoveredCardId);
+            if (!card) return;
+
+            let targetCategory = '';
+            if (key === 'S') targetCategory = 'Sideboard';
+            else if (key === 'M') targetCategory = 'Maybeboard';
+            else if (key === 'A') {
+                // Auto-categorize
+                if (scryfallCache.current[card.card_name]?.typeLine) {
+                    targetCategory = getCategoryFromType(scryfallCache.current[card.card_name].typeLine!);
+                } else {
+                    try {
+                        const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(card.card_name)}`);
+                        if (res.ok) {
+                            const data = await res.json();
+                            scryfallCache.current[card.card_name] = {
+                                ...scryfallCache.current[card.card_name],
+                                img: data.image_uris?.normal || data.image_uris?.small || null,
+                                typeLine: data.type_line
+                            };
+                            targetCategory = getCategoryFromType(data.type_line);
+                        }
+                    } catch {
+                        targetCategory = 'Uncategorized';
+                    }
+                }
+            }
+
+            if (targetCategory && targetCategory !== card.category) {
+                // Debounce the actual API call
+                if (categoryDebounceTimer.current) clearTimeout(categoryDebounceTimer.current);
+                
+                // Immediately update local UI for snappiness
+                setDeck(prev => {
+                    if (!prev) return null;
+                    return {
+                        ...prev,
+                        cards: prev.cards.map(c => c.id === card.id ? { ...c, category: targetCategory } : c)
+                    };
+                });
+
+                categoryDebounceTimer.current = setTimeout(async () => {
+                    await handleUpdateCard(card, { category: targetCategory });
+                    addToast(`Updated ${card.card_name} to ${targetCategory}`, 'success');
+                }, 300);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [hoveredCardId, deck, showImport, showSearchModal, showCustomCardModal, handleUpdateCard, addToast, getCategoryFromType]);
 
     // ── Clipboard & Drag-Drop Import ──
     useEffect(() => {
@@ -413,14 +573,14 @@ export default function DeckEditorPage() {
             if (uniqueNames.length === 0) return;
 
             addToast(`Importing ${uniqueNames.length} card(s) from link(s)...`, 'info');
-            
+
             for (const name of uniqueNames) {
                 try {
                     const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
                     if (res.ok) {
                         const data = await res.json();
                         const scryfallName = data.name;
-                        await handleSyncCardQuantity(scryfallName, 1);
+                        await handleSyncCardQuantity(scryfallName, 1, data.type_line);
                     } else {
                         addToast(`Card "${name}" not found.`, 'error');
                     }
@@ -463,23 +623,23 @@ export default function DeckEditorPage() {
 
     const handleShare = () => {
         if (!deck) return;
-        
+
         const hasCustomCards = deck.cards.some(c => c.custom_image);
-        
+
         const portableDeck = {
             n: deck.name,
             c: deck.cards.map(c => ({
                 n: c.card_name,
                 q: c.quantity,
                 // We strip the image here because Base64 images in URLs cause HTTP 431 (Header too large)
-                i: null 
+                i: null
             }))
         };
-        
+
         const compressed = compressDeck(portableDeck);
         const url = `${window.location.origin}/portable?deck=${compressed}`;
         navigator.clipboard.writeText(url);
-        
+
         if (hasCustomCards) {
             addToast('Portable link copied! Note: Custom images are excluded from portable links to keep them short.', 'warning', 6000);
         } else {
@@ -586,17 +746,21 @@ export default function DeckEditorPage() {
                     {/* View Toggle */}
                     <div className="flex items-center gap-3 bg-gray-100 p-1 rounded-md ml-2">
                         {viewMode === 'grid' && (
-                            <div className="flex items-center gap-2 px-2 border-r border-gray-300">
-                                <span className="text-[10px] uppercase font-bold text-gray-400">Zoom</span>
-                                <input 
-                                    type="range" 
-                                    min="0.5" 
-                                    max="1.5" 
-                                    step="0.1" 
-                                    value={gridScale}
-                                    onChange={(e) => setGridScale(parseFloat(e.target.value))}
-                                    className="w-20 h-1 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                />
+                            <div className="flex items-center gap-2 bg-white/40 px-1 py-1 rounded-lg border border-white/40 shadow-sm mr-2">
+                                <button
+                                    onClick={() => setGridScale(1.7)}
+                                    className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.0 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600 hover:bg-white/20'}`}
+                                    title="Default Zoom"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+                                </button>
+                                <button
+                                    onClick={() => setGridScale(2.3)}
+                                    className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.0 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600 hover:bg-white/20'}`}
+                                    title="Large Zoom"
+                                >
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
+                                </button>
                             </div>
                         )}
                         <div className="flex items-center gap-1">
@@ -631,7 +795,7 @@ export default function DeckEditorPage() {
                     />
                 )}
 
-                {/* Card List */}
+                {/* Card List grouped by Category */}
                 {deck.cards.length === 0 ? (
                     <div className="bg-blue-50/60 rounded-lg shadow-sm border border-blue-100 p-12 text-center">
                         <h2 className="text-xl font-semibold text-gray-700 mb-2">No cards yet</h2>
@@ -644,46 +808,118 @@ export default function DeckEditorPage() {
                         </button>
                     </div>
                 ) : (
-                    <div className="bg-blue-50/60 rounded-lg shadow-sm border border-blue-100 overflow-hidden min-h-[400px]">
-                        {viewMode === 'table' ? (
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-blue-100/50">
-                                    <tr>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-12">#</th>
-                                        <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider w-10">👁</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Qty</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Card Name</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Order</th>
-                                        <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-20">Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="bg-white divide-y divide-gray-100">
-                                    {deck.cards.map((card, idx) => (
+                    <div className={viewMode === 'grid' ? "grid grid-cols-1 xl:grid-cols-2 gap-8" : "space-y-8"}>
+                        {Object.entries(groupedCards).map(([category, cards]) => (
+                            <div
+                                key={category}
+                                className="bg-white/50 backdrop-blur-sm rounded-xl border border-gray-100 shadow-sm overflow-hidden"
+                                onDragOver={(e) => e.preventDefault()}
+                                onDrop={(e) => handleDropOnCategory(e, category)}
+                            >
+                                <div className="bg-blue-50/80 px-4 py-2 border-b border-gray-100 flex justify-between items-center group/cat">
+                                    <h3 className="text-sm font-bold text-blue-800 uppercase tracking-wider flex items-center gap-2">
+                                        📁 {category}
+                                        <span className="text-xs font-medium text-blue-400 normal-case">({cards.reduce((s, c) => s + c.quantity, 0)} cards)</span>
+                                    </h3>
+                                </div>
+                                <div className="p-1">
+                                    {viewMode === 'table' ? (
+                                        <table className="min-w-full divide-y divide-gray-100">
+                                            <thead className="hidden">
+                                                <tr>
+                                                    <th className="w-12">#</th>
+                                                    <th className="w-10">👁</th>
+                                                    <th className="w-20">Qty</th>
+                                                    <th>Name</th>
+                                                    <th className="w-32">Order</th>
+                                                    <th className="w-20">Actions</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-50">
+                                                {cards.map((card, idx) => (
                                         <CardRow
                                             key={card.id}
                                             card={card}
                                             index={idx}
                                             isFirst={idx === 0}
-                                            isLast={idx === deck.cards.length - 1}
+                                            isLast={idx === cards.length - 1}
                                             onUpdate={handleUpdateCard}
                                             onDelete={handleDeleteCard}
                                             onMove={handleMoveCard}
-                                            animateY={animatingCards[card.id] || 0}
-                                            rowRef={(el) => (rowRefs.current[card.id] = el)}
+                                            animateY={0}
+                                            rowRefs={rowRefs}
                                             scryfallCache={scryfallCache}
+                                            onDragStart={handleDragStart}
+                                            onHover={() => setHoveredCardId(card.id)}
+                                            onLeave={() => setHoveredCardId(null)}
                                         />
-                                    ))}
-                                </tbody>
-                            </table>
-                        ) : (
-                            <GridView
-                                cards={deck.cards}
-                                onUpdate={handleUpdateCard}
-                                onDelete={handleDeleteCard}
-                                scryfallCache={scryfallCache}
-                                scale={gridScale}
-                            />
-                        )}
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    ) : (
+                                        <GridView
+                                            cards={cards}
+                                            onUpdate={handleUpdateCard}
+                                            onDelete={handleDeleteCard}
+                                            scryfallCache={scryfallCache}
+                                            scale={gridScale}
+                                            onDragStart={handleDragStart}
+                                            onHoverCard={setHoveredCardId}
+                                        />
+                                    )}
+                                    {cards.length === 0 && (
+                                        <div className="py-8 text-center text-gray-400 text-sm italic">
+                                            Drop cards here to move them to this category
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+
+                        <div className="flex justify-center pt-8 pb-12 min-h-[100px]">
+                            <div className={`relative h-[72px] transition-all duration-500 ease-in-out w-full ${isAddingCategory ? 'max-w-md' : 'max-w-[288px]'}`}>
+                                {/* The "Add New" Button */}
+                                <div className={`absolute inset-0 transition-all duration-500 ${!isAddingCategory ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-75 invisible pointer-events-none'}`}>
+                                    <button
+                                        onClick={() => setIsAddingCategory(true)}
+                                        className="w-full h-full flex items-center justify-center gap-3 px-6 bg-white border-2 border-dashed border-gray-300 rounded-2xl text-gray-400 hover:text-blue-500 hover:border-blue-400 hover:bg-blue-50/50 transition-all group shadow-sm hover:shadow-md"
+                                    >
+                                        <span className="text-2xl font-light group-hover:rotate-90 transition-transform duration-300">+</span>
+                                        <span className="font-bold text-xs tracking-widest uppercase">Add New Category</span>
+                                    </button>
+                                </div>
+
+                                {/* The Animated Input Box */}
+                                <div className={`absolute inset-0 transition-all duration-500 ${isAddingCategory ? 'opacity-100 scale-100 visible' : 'opacity-0 scale-95 invisible pointer-events-none translate-y-2'}`}>
+                                    <div className="flex items-center gap-2 bg-white border-2 border-blue-500 rounded-2xl p-1.5 shadow-xl ring-2 ring-blue-50 h-full">
+                                        <input
+                                            autoFocus={isAddingCategory}
+                                            type="text"
+                                            placeholder="Enter category name..."
+                                            value={newCategoryName}
+                                            onChange={(e) => setNewCategoryName(e.target.value)}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') handleConfirmAddCategory();
+                                                if (e.key === 'Escape') setIsAddingCategory(false);
+                                            }}
+                                            className="flex-1 px-4 py-2 text-base font-semibold outline-none bg-transparent text-gray-800 placeholder:text-gray-400"
+                                        />
+                                        <button
+                                            onClick={handleConfirmAddCategory}
+                                            className="bg-blue-600 text-white w-11 h-11 rounded-xl flex items-center justify-center hover:bg-blue-700 active:scale-95 transition-all shadow-md"
+                                        >
+                                            <span className="text-2xl font-bold leading-none pb-2">›</span>
+                                        </button>
+                                        <button
+                                            onClick={() => setIsAddingCategory(false)}
+                                            className="bg-red-200 text-red-500 w-11 h-11 rounded-xl flex items-center justify-center hover:bg-red-100 active:scale-95 transition-all shadow-sm"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 )}
             </div>
@@ -692,7 +928,9 @@ export default function DeckEditorPage() {
             {showProxySheet && (
                 <ProxySheet
                     cards={deck.cards}
-                    scryfallCache={scryfallCache.current}
+                    scryfallCache={Object.fromEntries(
+                        Object.entries(scryfallCache.current).map(([name, data]) => [name, data.img])
+                    )}
                     onClose={() => setShowProxySheet(false)}
                 />
             )}
@@ -708,9 +946,9 @@ export default function DeckEditorPage() {
             {showSearchModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
                     <div className="w-full max-w-6xl max-h-[90vh] flex flex-col">
-                        <CardSearcher 
-                            onSyncQuantity={handleSyncCardQuantity} 
-                            onClose={() => setShowSearchModal(false)} 
+                        <CardSearcher
+                            onSyncQuantity={handleSyncCardQuantity}
+                            onClose={() => setShowSearchModal(false)}
                             existingQuantities={cardQuantities}
                         />
                     </div>
@@ -721,21 +959,23 @@ export default function DeckEditorPage() {
 }
 
 // ── Grid View Components ──
-function GridView({ cards, onUpdate, onDelete, scryfallCache, scale }: {
+function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHoverCard }: {
     cards: Card[];
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
-    scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+    scryfallCache: React.MutableRefObject<Record<string, { img: string | null; typeLine?: string }>>;
     scale: number;
+    onDragStart: (e: React.DragEvent, card: Card) => void;
+    onHoverCard: (id: string | null) => void;
 }) {
-    // Standard card width is ~150px at scale 1.0
-    const cardWidth = Math.round(150 * scale);
+    // Standard base 100px
+    const cardWidth = Math.round(100 * scale);
 
     return (
-        <div 
-            className="grid gap-4 p-6"
-            style={{ 
-                gridTemplateColumns: `repeat(auto-fill, minmax(${cardWidth}px, 1fr))` 
+        <div
+            className="grid gap-2 p-2"
+            style={{
+                gridTemplateColumns: `repeat(auto-fill, minmax(${cardWidth}px, 1fr))`
             }}
         >
             {cards.map(card => (
@@ -746,18 +986,24 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale }: {
                     onDelete={onDelete}
                     scryfallCache={scryfallCache}
                     scale={scale}
+                    onDragStart={onDragStart}
+                    onHover={() => onHoverCard(card.id)}
+                    onLeave={() => onHoverCard(null)}
                 />
             ))}
         </div>
     );
 }
 
-function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
+function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHover, onLeave }: {
     card: Card;
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
-    scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+    scryfallCache: React.MutableRefObject<Record<string, { img: string | null; typeLine?: string }>>;
     scale: number;
+    onDragStart: (e: React.DragEvent, card: Card) => void;
+    onHover: () => void;
+    onLeave: () => void;
 }) {
     const [img, setImg] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -770,7 +1016,7 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
         const fetchImg = async () => {
             const name = card.card_name;
             if (scryfallCache.current[name] !== undefined) {
-                setImg(scryfallCache.current[name]);
+                setImg(scryfallCache.current[name].img);
                 return;
             }
             setLoading(true);
@@ -779,13 +1025,15 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
                 if (res.ok) {
                     const data = await res.json();
                     const url = data.image_uris?.normal || data.image_uris?.small || null;
-                    scryfallCache.current[name] = url;
+                    scryfallCache.current[name] = { img: url, typeLine: data.type_line };
                     setImg(url);
                 } else {
-                    scryfallCache.current[name] = null;
+                    scryfallCache.current[name] = { img: null };
+                    setImg(null);
                 }
             } catch {
-                scryfallCache.current[name] = null;
+                scryfallCache.current[name] = { img: null };
+                setImg(null);
             } finally {
                 setLoading(false);
             }
@@ -794,7 +1042,13 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
     }, [card.card_name, card.custom_image, scryfallCache]);
 
     return (
-        <div className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md hover:border-blue-300">
+        <div
+            draggable
+            onDragStart={(e) => onDragStart(e, card)}
+            onMouseEnter={onHover}
+            onMouseLeave={onLeave}
+            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing"
+        >
             {/* Image Container */}
             <div className="aspect-[63/88] bg-gray-50 relative overflow-hidden flex items-center justify-center">
                 {loading ? (
@@ -819,26 +1073,29 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
 
                     <div className="flex items-center justify-center gap-3 bg-white/10 backdrop-blur-md rounded-full py-1.5 px-3 mx-auto mb-2 border border-white/20">
                         <button
-                            onClick={() => {
+                            onClick={(e) => {
+                                e.stopPropagation();
                                 if (card.quantity === 1) {
                                     onDelete(card.id);
                                 } else {
                                     onUpdate(card, { quantity: card.quantity - 1 });
                                 }
                             }}
-                            className={`flex items-center justify-center transition-all select-none ${
-                                card.quantity === 1 
-                                    ? 'w-6 h-6 bg-red-500 rounded text-white hover:bg-red-600' 
-                                    : 'w-4 text-white hover:text-blue-400 font-bold'
-                            }`}
+                            className={`flex items-center justify-center transition-all select-none ${card.quantity === 1
+                                ? 'w-6 h-6 bg-red-500 rounded text-white hover:bg-red-600'
+                                : 'w-4 text-white hover:text-blue-400 font-bold'
+                                }`}
                         >
                             {card.quantity === 1 ? (
-                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
                             ) : "-"}
                         </button>
                         <span className="text-white font-bold text-sm min-w-[20px] text-center">{card.quantity}</span>
                         <button
-                            onClick={() => onUpdate(card, { quantity: card.quantity + 1 })}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                onUpdate(card, { quantity: card.quantity + 1 });
+                            }}
                             className="text-white hover:text-blue-400 font-bold w-4 text-center select-none"
                         >
                             +
@@ -857,7 +1114,7 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
 }
 
 // ── Inline Editable Card Row ──
-function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, animateY, rowRef, scryfallCache }: {
+function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, animateY, rowRefs, scryfallCache, onDragStart, onHover, onLeave }: {
     card: Card;
     index: number;
     isFirst: boolean;
@@ -866,8 +1123,11 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
     onDelete: (id: string) => void;
     onMove: (card: Card, direction: 'up' | 'down') => void;
     animateY: number;
-    rowRef: (el: HTMLTableRowElement | null) => void;
-    scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+    rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>;
+    scryfallCache: React.MutableRefObject<Record<string, { img: string | null; typeLine?: string }>>;
+    onDragStart: (e: React.DragEvent, card: Card) => void;
+    onHover: () => void;
+    onLeave: () => void;
 }) {
     const [editingName, setEditingName] = useState(false);
     const [nameVal, setNameVal] = useState(card.card_name);
@@ -892,7 +1152,7 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
         const name = card.card_name;
         // Check cache first
         if (scryfallCache.current[name] !== undefined) {
-            setPreviewImg(scryfallCache.current[name]);
+            setPreviewImg(scryfallCache.current[name].img);
             return;
         }
         setPreviewLoading(true);
@@ -901,14 +1161,14 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
             if (res.ok) {
                 const data = await res.json();
                 const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
-                scryfallCache.current[name] = imgUrl;
+                scryfallCache.current[name] = { img: imgUrl, typeLine: data.type_line };
                 setPreviewImg(imgUrl);
             } else {
-                scryfallCache.current[name] = null;
+                scryfallCache.current[name] = { img: null };
                 setPreviewImg(null);
             }
         } catch {
-            scryfallCache.current[name] = null;
+            scryfallCache.current[name] = { img: null };
             setPreviewImg(null);
         } finally {
             setPreviewLoading(false);
@@ -927,8 +1187,12 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
 
     return (
         <tr
-            ref={rowRef}
-            className="hover:bg-blue-50/40"
+            ref={(el) => { rowRefs.current[card.id] = el; }}
+            draggable
+            onDragStart={(e) => onDragStart(e, card)}
+            onMouseEnter={onHover}
+            onMouseLeave={onLeave}
+            className="hover:bg-blue-50/40 cursor-grab active:cursor-grabbing"
             style={{
                 transform: animateY !== 0 ? `translateY(${animateY}px)` : undefined,
                 transition: animateY !== 0 ? 'transform 0.2s ease-in-out' : undefined,

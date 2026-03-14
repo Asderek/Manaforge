@@ -20,7 +20,7 @@ interface ScryfallCard {
 }
 
 interface CardSearcherProps {
-    onSyncQuantity: (cardName: string, newQuantity: number) => void;
+    onSyncQuantity: (cardName: string, newQuantity: number, typeLine?: string) => void;
     onClose: () => void;
     existingQuantities: Record<string, number>;
 }
@@ -30,7 +30,7 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
     const [results, setResults] = useState<ScryfallCard[]>([]);
     const [loading, setLoading] = useState(false);
     const [touched, setTouched] = useState(false);
-    const [gridScale, setGridScale] = useState(1.5);
+    const [gridScale, setGridScale] = useState(1.85);
 
     // localQuantities tracks the visual state, including non-synced changes
     const [localQuantities, setLocalQuantities] = useState<Record<string, number>>({});
@@ -59,8 +59,9 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
         }
 
         // 3. Set a new timer to sync with parent
+        const card = results.find(c => c.name === cardName);
         debounceTimers.current[cardName] = setTimeout(() => {
-            onSyncQuantity(cardName, newQty);
+            onSyncQuantity(cardName, newQty, card?.type_line);
             delete debounceTimers.current[cardName];
         }, 300); // 300ms action debounce
     };
@@ -102,8 +103,8 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
         };
     }, []);
 
-    // Card width calculation
-    const cardWidth = Math.round(140 * gridScale);
+    // Card width calculation - Base 100 means 2.0 = 200px, 2.5 = 250px
+    const cardWidth = Math.round(100 * gridScale);
 
     return (
         <div className="flex flex-col h-[1000px] w-full bg-white/80 backdrop-blur-xl rounded-2xl overflow-hidden border border-white/20 shadow-2xl">
@@ -116,16 +117,18 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                         </h2>
                         <div className="flex items-center gap-2 bg-white/40 px-1 py-1 rounded-lg border border-white/40 shadow-sm ml-4">
                             <button
-                                onClick={() => setGridScale(1.5)}
-                                className={`px-2 py-1 text-[10px] font-black rounded-md transition-all ${gridScale === 1.5 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                onClick={() => setGridScale(1.85)}
+                                className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.2 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                title="Default Size"
                             >
-                                150%
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
                             </button>
                             <button
-                                onClick={() => setGridScale(2.0)}
-                                className={`px-2 py-1 text-[10px] font-black rounded-md transition-all ${gridScale === 2.0 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                onClick={() => setGridScale(2.45)}
+                                className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.2 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                title="Zoomed Size"
                             >
-                                200%
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="11" y1="8" x2="11" y2="14"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
                             </button>
                         </div>
                     </div>
