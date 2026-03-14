@@ -7,6 +7,7 @@ import { useToast } from '../../components/Toast';
 import ProxySheet from '../../components/ProxySheet';
 import CustomCardModal from '@/app/components/CustomCardModal';
 import ImportDeckModal from '@/app/components/ImportDeckModal';
+import CardSearcher from '@/app/components/CardSearcher';
 import { compressDeck } from '@/app/utils/deckSharing';
 
 type Card = {
@@ -45,7 +46,9 @@ export default function DeckEditorPage() {
     const [importProgress, setImportProgress] = useState('');
     const [showProxySheet, setShowProxySheet] = useState(false);
     const [showCustomCardModal, setShowCustomCardModal] = useState(false);
+    const [showSearchModal, setShowSearchModal] = useState(false);
     const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
+    const [gridScale, setGridScale] = useState(1.0);
 
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
@@ -334,6 +337,51 @@ export default function DeckEditorPage() {
     };
 
     const totalCards = deck?.cards.reduce((sum, c) => sum + c.quantity, 0) ?? 0;
+    
+    const cardQuantities = React.useMemo(() => {
+        const counts: Record<string, number> = {};
+        deck?.cards.forEach(c => {
+            counts[c.card_name] = c.quantity;
+        });
+        return counts;
+    }, [deck?.cards]);
+
+    const handleSyncCardQuantity = async (cardName: string, newQuantity: number) => {
+        const existingCard = deck?.cards.find(c => c.card_name === cardName);
+
+        if (newQuantity === 0) {
+            if (existingCard) {
+                await handleDeleteCard(existingCard.id);
+                addToast(`Removed ${cardName} from deck!`, 'success');
+            }
+            return;
+        }
+
+        if (existingCard) {
+            await handleUpdateCard(existingCard, { quantity: newQuantity });
+            addToast(`Updated ${cardName} to ${newQuantity}!`, 'success');
+        } else {
+            setSaving(true);
+            try {
+                const res = await fetch(`${apiUrl}/api/decks/${deckId}/cards`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ cards: [{ card_name: cardName, quantity: newQuantity }] })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    fetchDeck();
+                    addToast(`Added ${newQuantity}x ${cardName} to deck!`, 'success');
+                }
+            } catch (err: any) {
+                addToast(err.message, 'error');
+            } finally {
+                setSaving(false);
+            }
+        }
+    };
+
 
     const handleShare = () => {
         if (!deck) return;
@@ -450,21 +498,43 @@ export default function DeckEditorPage() {
                     >
                         🔗 Share Portable Link
                     </button>
+                    <button
+                        onClick={() => setShowSearchModal(true)}
+                        className="bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer ml-auto"
+                    >
+                        🔍 Search Cards
+                    </button>
 
                     {/* View Toggle */}
-                    <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md ml-auto">
-                        <button
-                            onClick={() => setViewMode('table')}
-                            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'table' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                        >
-                            Table
-                        </button>
-                        <button
-                            onClick={() => setViewMode('grid')}
-                            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                        >
-                            Grid
-                        </button>
+                    <div className="flex items-center gap-3 bg-gray-100 p-1 rounded-md ml-2">
+                        {viewMode === 'grid' && (
+                            <div className="flex items-center gap-2 px-2 border-r border-gray-300">
+                                <span className="text-[10px] uppercase font-bold text-gray-400">Zoom</span>
+                                <input 
+                                    type="range" 
+                                    min="0.5" 
+                                    max="1.5" 
+                                    step="0.1" 
+                                    value={gridScale}
+                                    onChange={(e) => setGridScale(parseFloat(e.target.value))}
+                                    className="w-20 h-1 bg-gray-300 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                />
+                            </div>
+                        )}
+                        <div className="flex items-center gap-1">
+                            <button
+                                onClick={() => setViewMode('table')}
+                                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'table' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                Table
+                            </button>
+                            <button
+                                onClick={() => setViewMode('grid')}
+                                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${viewMode === 'grid' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                            >
+                                Grid
+                            </button>
+                        </div>
                     </div>
                 </div>
 
@@ -533,6 +603,7 @@ export default function DeckEditorPage() {
                                 onUpdate={handleUpdateCard}
                                 onDelete={handleDeleteCard}
                                 scryfallCache={scryfallCache}
+                                scale={gridScale}
                             />
                         )}
                     </div>
@@ -555,19 +626,40 @@ export default function DeckEditorPage() {
                     onCreate={handleCreateCustomCard}
                 />
             )}
+
+            {showSearchModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="w-full max-w-6xl max-h-[90vh] flex flex-col">
+                        <CardSearcher 
+                            onSyncQuantity={handleSyncCardQuantity} 
+                            onClose={() => setShowSearchModal(false)} 
+                            existingQuantities={cardQuantities}
+                        />
+                    </div>
+                </div>
+            )}
         </main>
     );
 }
 
 // ── Grid View Components ──
-function GridView({ cards, onUpdate, onDelete, scryfallCache }: {
+function GridView({ cards, onUpdate, onDelete, scryfallCache, scale }: {
     cards: Card[];
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
     scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+    scale: number;
 }) {
+    // Standard card width is ~150px at scale 1.0
+    const cardWidth = Math.round(150 * scale);
+
     return (
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4 p-6">
+        <div 
+            className="grid gap-4 p-6"
+            style={{ 
+                gridTemplateColumns: `repeat(auto-fill, minmax(${cardWidth}px, 1fr))` 
+            }}
+        >
             {cards.map(card => (
                 <GridCard
                     key={card.id}
@@ -575,17 +667,19 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache }: {
                     onUpdate={onUpdate}
                     onDelete={onDelete}
                     scryfallCache={scryfallCache}
+                    scale={scale}
                 />
             ))}
         </div>
     );
 }
 
-function GridCard({ card, onUpdate, onDelete, scryfallCache }: {
+function GridCard({ card, onUpdate, onDelete, scryfallCache, scale }: {
     card: Card;
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
     scryfallCache: React.MutableRefObject<Record<string, string | null>>;
+    scale: number;
 }) {
     const [img, setImg] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -647,10 +741,22 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache }: {
 
                     <div className="flex items-center justify-center gap-3 bg-white/10 backdrop-blur-md rounded-full py-1.5 px-3 mx-auto mb-2 border border-white/20">
                         <button
-                            onClick={() => onUpdate(card, { quantity: Math.max(1, card.quantity - 1) })}
-                            className="text-white hover:text-blue-400 font-bold w-4 text-center select-none"
+                            onClick={() => {
+                                if (card.quantity === 1) {
+                                    onDelete(card.id);
+                                } else {
+                                    onUpdate(card, { quantity: card.quantity - 1 });
+                                }
+                            }}
+                            className={`flex items-center justify-center transition-all select-none ${
+                                card.quantity === 1 
+                                    ? 'w-6 h-6 bg-red-500 rounded text-white hover:bg-red-600' 
+                                    : 'w-4 text-white hover:text-blue-400 font-bold'
+                            }`}
                         >
-                            -
+                            {card.quantity === 1 ? (
+                                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                            ) : "-"}
                         </button>
                         <span className="text-white font-bold text-sm min-w-[20px] text-center">{card.quantity}</span>
                         <button
