@@ -663,7 +663,7 @@ export default function DeckEditorPage() {
         setDraggedCardId(card.id);
     };
 
-    const handleCardDrop = async (e: React.DragEvent, targetCategory: string, dropIndex?: number) => {
+    const handleCardDrop = useCallback(async (e: React.DragEvent, targetCategory: string, dropIndex?: number) => {
         e.preventDefault();
         setDraggedCardId(null);
         const cardId = e.dataTransfer.getData('cardId');
@@ -672,43 +672,72 @@ export default function DeckEditorPage() {
         const card = deck?.cards.find(c => c.id === cardId);
         if (!card) return;
 
-        // 1. If moving to a DIFFERENT category
+        // 1. Optimistic UI Update: Change category immediately if needed
         if (card.category !== targetCategory) {
             const oldCategory = card.category;
-            await handleUpdateCard(card, { category: targetCategory });
-            addToast(`Moved ${card.card_name} to ${targetCategory}`, 'success');
 
-            if (oldCategory) {
-                const updatedCards = deck?.cards ? deck.cards.map(c =>
-                    c.id === cardId ? { ...c, category: targetCategory } : c
-                ) : [];
-                handleCleanupCategory(oldCategory, updatedCards);
-            }
+            // Immediately update deck state for snappiness
+            setDeck(prev => {
+                if (!prev) return prev;
+                return {
+                    ...prev,
+                    cards: prev.cards.map(c => c.id === cardId ? { ...c, category: targetCategory } : c)
+                };
+            });
+
+            // Persist to backend (fire and forget except for cleanup logic)
+            handleUpdateCard(card, { category: targetCategory }).then(() => {
+                addToast(`Moved ${card.card_name} to ${targetCategory}`, 'success');
+                // Cleanup old category if it's now empty
+                setDeck(currentDeck => {
+                    if (oldCategory && currentDeck) {
+                        handleCleanupCategory(oldCategory, currentDeck.cards);
+                    }
+                    return currentDeck;
+                });
+            });
         }
 
-        // 2. Handle inner reordering or if we just want to set the custom order
-        // We always update the custom order for the target category when a drop happens
+        // 2. Clear reorder indicators
         setSortMode('custom');
 
+        // 3. Update Custom Order for BOTH categories
         setCustomCardOrder(prev => {
-            const currentOrder = groupedCards.find(g => g.category === targetCategory)?.cards.map(c => c.id) || [];
+            const nextOrder = { ...prev };
 
-            // Remove card from its current position in target category if it was already there
-            let newOrder = currentOrder.filter(id => id !== cardId);
-
-            // Insert at drop index
-            if (typeof dropIndex === 'number') {
-                newOrder.splice(dropIndex, 0, cardId);
-            } else {
-                newOrder.push(cardId);
+            // A. Remove card from SOURCE category custom order if cross-category move
+            if (sourceCategory && sourceCategory !== targetCategory) {
+                const sourceList = nextOrder[sourceCategory] || [];
+                nextOrder[sourceCategory] = sourceList.filter(id => id !== cardId);
             }
 
-            return {
-                ...prev,
-                [targetCategory]: newOrder
-            };
+            // B. Calculate TARGET category order
+            const currentTargetCards = groupedCards.find(g => g.category === targetCategory)?.cards || [];
+
+            if (sourceCategory && sourceCategory !== targetCategory) {
+                // CROSS-CATEGORY: Always insert ALPHABETICALLY as per user request
+                const allCardsWithNew = [...currentTargetCards, card];
+                const sortedIds = allCardsWithNew
+                    .sort((a, b) => a.card_name.localeCompare(b.card_name))
+                    .map(c => c.id);
+                nextOrder[targetCategory] = sortedIds;
+            } else {
+                // INTRA-CATEGORY: Standard reordering logic
+                const currentIds = currentTargetCards.map(c => c.id);
+                let newTargetOrder = currentIds.filter(id => id !== cardId);
+
+                // Insert at new position
+                if (typeof dropIndex === 'number') {
+                    newTargetOrder.splice(dropIndex, 0, cardId);
+                } else {
+                    newTargetOrder.push(cardId);
+                }
+                nextOrder[targetCategory] = newTargetOrder;
+            }
+
+            return nextOrder;
         });
-    };
+    }, [deck, handleUpdateCard, addToast, groupedCards, handleCleanupCategory]);
 
     const cardQuantities = React.useMemo(() => {
         const counts: Record<string, number> = {};
@@ -782,7 +811,15 @@ export default function DeckEditorPage() {
             }
 
             const key = e.key.toUpperCase();
-            if (!['A', 'S', 'M'].includes(key) || !hoveredCardId || !deck) return;
+            if (!['A', 'S', 'M', 'G', 'T'].includes(key) || !deck) return;
+
+            if (key === 'G') {
+                setViewMode('grid')
+            } else if (key === 'T') {
+                setViewMode('table')
+            }
+
+            if (!hoveredCardId) return;
 
             const card = deck.cards.find(c => c.id === hoveredCardId);
             if (!card) return;
@@ -1185,22 +1222,26 @@ export default function DeckEditorPage() {
                                     <th className="w-20 text-right">Actions</th>
                                 </tr>
                             </thead>
-                            {groupedCards.map(({ category, cards }) => (
-                                <TableView
-                                    key={category}
-                                    categoryName={category}
-                                    cards={cards}
-                                    draggedCardId={draggedCardId}
-                                    onUpdate={handleUpdateCard}
-                                    onDelete={handleDeleteCard}
-                                    rowRefs={rowRefs}
-                                    scryfallCache={scryfallCache}
-                                    onDragStart={handleDragStart}
-                                    onDragEnd={() => setDraggedCardId(null)}
-                                    onHoverCard={setHoveredCardId}
-                                    onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
-                                />
-                            ))}
+                            {groupedCards.map(({ category, cards: catCards }) => {
+                                const isForeign = draggedCardId !== null && !catCards.some(c => c.id === draggedCardId);
+                                return (
+                                    <TableView
+                                        key={category}
+                                        categoryName={category}
+                                        cards={catCards}
+                                        draggedCardId={draggedCardId}
+                                        isForeign={isForeign}
+                                        onUpdate={handleUpdateCard}
+                                        onDelete={handleDeleteCard}
+                                        rowRefs={rowRefs}
+                                        scryfallCache={scryfallCache}
+                                        onDragStart={handleDragStart}
+                                        onDragEnd={() => setDraggedCardId(null)}
+                                        onHoverCard={setHoveredCardId}
+                                        onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
+                                    />
+                                );
+                            })}
                         </table>
                     </div>
                 ) : (
@@ -1237,6 +1278,8 @@ export default function DeckEditorPage() {
                                         onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
                                         draggedCardId={draggedCardId}
                                         isExpanded={!!expandedGrids[category]}
+                                        isForeign={draggedCardId !== null && !cards.some(c => c.id === draggedCardId)}
+                                        categoryName={category}
                                     />
                                     {cards.length === 0 && (
                                         <div className="py-8 text-center text-gray-400 text-sm italic">
@@ -1453,7 +1496,7 @@ function CategoryReorderModal({ categories, onOrderChange, onRenameCategory, onD
 }
 
 // ── Grid View Components ──
-function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHoverCard, onDrop, draggedCardId, isExpanded }: {
+function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHoverCard, onDrop, draggedCardId, isExpanded, isForeign, categoryName }: {
     cards: Card[];
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
@@ -1461,11 +1504,14 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
     scale: number;
     onDragStart: (e: React.DragEvent, card: Card) => void;
     onHoverCard: (id: string | null) => void;
-    onDrop: (e: React.DragEvent, index: number) => void;
+    onDrop: (e: React.DragEvent, index?: number) => void;
     draggedCardId: string | null;
     isExpanded: boolean;
+    isForeign: boolean;
+    categoryName: string;
 }) {
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+    const [isBlockDragOver, setIsBlockDragOver] = useState(false);
 
     const handleDragOver = (e: React.DragEvent, index: number) => {
         e.preventDefault();
@@ -1493,16 +1539,48 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
 
     return (
         <div
-            className={containerClass}
-            onMouseLeave={() => setDragOverIndex(null)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-                e.stopPropagation();
-                if (dragOverIndex !== null) {
-                    onDrop(e, dragOverIndex);
+            className={`${containerClass} relative`}
+            onDragEnter={(e) => {
+                if (isForeign) {
+                    e.preventDefault();
+                    setIsBlockDragOver(true);
                 }
             }}
+            onDragLeave={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                if (e.clientX < rect.left || e.clientX >= rect.right || e.clientY < rect.top || e.clientY >= rect.bottom) {
+                    setIsBlockDragOver(false);
+                }
+            }}
+            onMouseLeave={() => {
+                setDragOverIndex(null);
+                setIsBlockDragOver(false);
+            }}
+            onDragOver={(e) => {
+                e.preventDefault();
+                if (isForeign) {
+                    setIsBlockDragOver(true);
+                    setDragOverIndex(null);
+                }
+            }}
+            onDrop={(e) => {
+                e.stopPropagation();
+                setIsBlockDragOver(false);
+                setDragOverIndex(null);
+                onDrop(e, isForeign ? undefined : (dragOverIndex ?? undefined));
+            }}
         >
+            {/* Block Drag Overlay for Grid */}
+            {isForeign && isBlockDragOver && (
+                <div className="pointer-events-none absolute inset-0 z-[100] flex flex-col items-center justify-center w-full h-full bg-blue-600/20 backdrop-blur-[2px] border-2 border-dashed border-blue-500 rounded-lg animate-in fade-in zoom-in duration-200">
+                    <div className="bg-blue-600 text-white p-3 rounded-full shadow-2xl mb-3 scale-125 animate-bounce">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m16 16 3-3 3 3" /><path d="M19 13V21" /><path d="M21 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5" /><path d="M21 7V3" /><path d="M21 11V3" /></svg>
+                    </div>
+                    <span className="text-blue-800 font-black text-lg uppercase tracking-[0.2em] drop-shadow-md">
+                        Drop to move to {categoryName}
+                    </span>
+                </div>
+            )}
             {cards.map((card, idx) => {
                 let shift = 0;
                 if (dragOverIndex !== null && idx >= dragOverIndex) {
@@ -1533,10 +1611,11 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
 
 // ── Table View Components ──
 // ── Table View Components ──
-function TableView({ categoryName, cards, draggedCardId, onUpdate, onDelete, rowRefs, scryfallCache, onDragStart, onDragEnd, onHoverCard, onDrop }: {
+function TableView({ categoryName, cards, draggedCardId, isForeign, onUpdate, onDelete, rowRefs, scryfallCache, onDragStart, onDragEnd, onHoverCard, onDrop }: {
     categoryName: string;
     cards: Card[];
     draggedCardId: string | null;
+    isForeign: boolean;
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
     rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>;
@@ -1544,9 +1623,10 @@ function TableView({ categoryName, cards, draggedCardId, onUpdate, onDelete, row
     onDragStart: (e: React.DragEvent, card: Card) => void;
     onDragEnd: () => void;
     onHoverCard: (id: string | null) => void;
-    onDrop: (e: React.DragEvent, index: number) => void;
+    onDrop: (e: React.DragEvent, index?: number) => void;
 }) {
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+    const [isBlockDragOver, setIsBlockDragOver] = useState(false);
 
     useEffect(() => {
         if (!draggedCardId) {
@@ -1569,16 +1649,56 @@ function TableView({ categoryName, cards, draggedCardId, onUpdate, onDelete, row
 
     return (
         <tbody
-            className="divide-y divide-gray-50"
-            onMouseLeave={() => setDragOverIndex(null)}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-                e.stopPropagation();
-                if (dragOverIndex !== null) {
-                    onDrop(e, dragOverIndex);
+            className="divide-y divide-gray-50 relative"
+            onDragEnter={(e) => {
+                if (isForeign) {
+                    e.preventDefault();
+                    setIsBlockDragOver(true);
                 }
             }}
+            onDragLeave={(e) => {
+                // Check if we are really leaving the tbody or just entering a child
+                const rect = e.currentTarget.getBoundingClientRect();
+                if (e.clientX < rect.left || e.clientX >= rect.right || e.clientY < rect.top || e.clientY >= rect.bottom) {
+                    setIsBlockDragOver(false);
+                }
+            }}
+            onMouseLeave={() => {
+                setDragOverIndex(null);
+                setIsBlockDragOver(false);
+            }}
+            onDragOver={(e) => {
+                e.preventDefault();
+                if (isForeign) {
+                    setIsBlockDragOver(true);
+                    setDragOverIndex(null); // Clear individual row shifts for block drag
+                }
+            }}
+            onDrop={(e) => {
+                e.stopPropagation();
+                setIsBlockDragOver(false);
+                setDragOverIndex(null);
+
+                // If dropping on block (foreign), index is undefined
+                // If dropping on specific row (intra-category), index is provided by handleDrop
+                onDrop(e, isForeign ? undefined : (dragOverIndex ?? undefined));
+            }}
         >
+            {/* Block Drag Overlay */}
+            {isForeign && isBlockDragOver && (
+                <tr className="pointer-events-none absolute inset-0 z-[100] block w-full h-full">
+                    <td className="block w-full h-full p-0 border-none">
+                        <div className="flex flex-col items-center justify-center w-full h-full bg-blue-600/20 backdrop-blur-[2px] border-2 border-dashed border-blue-500 rounded-lg animate-in fade-in zoom-in duration-200">
+                            <div className="bg-blue-600 text-white p-3 rounded-full shadow-2xl mb-3 scale-125 animate-bounce">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="m16 16 3-3 3 3" /><path d="M19 13V21" /><path d="M21 3H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5" /><path d="M21 7V3" /><path d="M21 11V3" /></svg>
+                            </div>
+                            <span className="text-blue-800 font-black text-lg uppercase tracking-[0.2em] drop-shadow-md">
+                                Drop to move to {categoryName}
+                            </span>
+                        </div>
+                    </td>
+                </tr>
+            )}
             {/* Category Header Row */}
             <tr className="bg-blue-50/80 group/cat sticky top-0 z-20">
                 <td colSpan={6} className="px-4 py-2 border-b border-gray-100">
@@ -1601,7 +1721,7 @@ function TableView({ categoryName, cards, draggedCardId, onUpdate, onDelete, row
                     const rowHeight = 45; // Match fixed height in CardRow
                     const isDragged = card.id === draggedCardId;
 
-                    if (dragOverIndex !== null) {
+                    if (dragOverIndex !== null && !isForeign) {
                         if (isDragged) {
                             // The row being dragged slides to the target slot
                             shiftY = (dragOverIndex - idx) * rowHeight;
