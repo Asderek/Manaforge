@@ -106,6 +106,24 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
     // Card width calculation - Base 100 means 2.0 = 200px, 2.5 = 250px
     const cardWidth = Math.round(100 * gridScale);
 
+    const [faceIndices, setFaceIndices] = useState<Record<string, number>>({});
+    const [flippingIds, setFlippingIds] = useState<Record<string, boolean>>({});
+
+    const handleFlip = (e: React.MouseEvent, cardId: string, max: number) => {
+        e.stopPropagation();
+        if (flippingIds[cardId]) return;
+
+        setFlippingIds(prev => ({ ...prev, [cardId]: true }));
+
+        setTimeout(() => {
+            setFaceIndices(prev => ({
+                ...prev,
+                [cardId]: ((prev[cardId] || 0) + 1) % max
+            }));
+            setFlippingIds(prev => ({ ...prev, [cardId]: false }));
+        }, 150);
+    };
+
     return (
         <div className="flex flex-col h-[1000px] w-full bg-white/80 backdrop-blur-xl rounded-2xl overflow-hidden border border-white/20 shadow-2xl">
             {/* Header / Search Area */}
@@ -182,7 +200,12 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                     }}
                 >
                     {results.map((card) => {
-                        const imgUrl = card.image_uris?.normal || card.card_faces?.[0]?.image_uris?.normal || null;
+                        const images = card.image_uris
+                            ? [card.image_uris.normal]
+                            : (card.card_faces ? card.card_faces.map(f => f.image_uris?.normal).filter(Boolean) as string[] : []);
+
+                        const currentFace = faceIndices[card.id] || 0;
+                        const imgUrl = images[currentFace] || null;
                         const cardQty = localQuantities[card.name] ?? existingQuantities[card.name] ?? 0;
 
                         return (
@@ -195,7 +218,8 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                                         <img
                                             src={imgUrl}
                                             alt={card.name}
-                                            className="w-full h-full object-cover"
+                                            className="w-full h-full object-cover transition-transform duration-150 ease-in-out"
+                                            style={{ transform: flippingIds[card.id] ? 'scaleX(0)' : 'scaleX(1)' }}
                                             loading="lazy"
                                         />
                                     ) : (
@@ -204,8 +228,19 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                                         </div>
                                     )}
 
+                                    {/* Flip Button overlay */}
+                                    {images.length > 1 && (
+                                        <button
+                                            onClick={(e) => handleFlip(e, card.id, images.length)}
+                                            className="absolute bottom-2 right-2 bg-purple-600/80 hover:bg-purple-600 text-white w-8 h-8 flex items-center justify-center rounded-full backdrop-blur-md border border-white/20 transition-all active:scale-90 z-20 shadow-lg"
+                                            title="Flip card"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M7 21l-4-4 4-4" /><path d="M3 17h18" /><path d="M17 3l4 4-4 4" /><path d="M21 7H3" /></svg>
+                                        </button>
+                                    )}
+
                                     {/* Overlay Action */}
-                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 backdrop-blur-[2px]">
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
                                         <div className="flex items-center justify-between bg-white/20 backdrop-blur-md rounded-xl p-2 border border-white/30 shadow-xl overflow-hidden">
                                             <button
                                                 onClick={() => handleAdjustQuantity(card.name, -1)}
@@ -213,7 +248,7 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                                                 className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all active:scale-90 disabled:opacity-30 ${cardQty === 1 ? 'bg-red-500 hover:bg-red-600' : 'bg-white/10 hover:bg-red-500/80'} text-white`}
                                             >
                                                 {cardQty === 1 ? (
-                                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /><line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" /></svg>
                                                 ) : (
                                                     <span className="text-xl font-bold">−</span>
                                                 )}

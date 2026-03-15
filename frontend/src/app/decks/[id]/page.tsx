@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useToast } from '../../components/Toast';
@@ -16,6 +17,7 @@ type Card = {
     quantity: number;
     category: string;
     sort_order: number;
+    created_at: string;
     custom_image?: string | null;
 };
 
@@ -24,6 +26,56 @@ type Deck = {
     name: string;
     description: string | null;
     cards: Card[];
+};
+
+const SortSelector = ({ current, onChange }: { current: 'alphabetical' | 'date' | 'custom', onChange: (val: 'alphabetical' | 'date' | 'custom') => void }) => {
+    const [isOpen, setIsOpen] = useState(false);
+    const options = [
+        { id: 'alphabetical', label: 'Alphabetical', icon: 'AZ' },
+        { id: 'date', label: 'Date Added', icon: '📅' },
+        { id: 'custom', label: 'Custom', icon: '⇅' },
+    ] as const;
+
+    const currentOpt = options.find(o => o.id === current) || options[0];
+
+    return (
+        <div
+            className={`relative flex items-center bg-white border border-gray-200 rounded-md shadow-sm h-9 transition-all duration-300 ease-in-out overflow-hidden ${isOpen ? 'w-[420px]' : 'w-10'}`}
+        // onMouseLeave={() => setIsOpen(false)}
+        >
+            {/* Main Toggle Button / Current Selection */}
+            <button
+                onClick={() => setIsOpen(!isOpen)}
+                className={`flex-shrink-0 w-10 h-full flex items-center justify-center font-bold text-sm transition-colors ${isOpen ? 'text-blue-600 bg-blue-50' : 'text-gray-600 hover:text-blue-600'}`}
+                title={`Sort: ${currentOpt.id}`}
+            >
+                {currentOpt.icon}
+            </button>
+
+            {/* Sliding Options */}
+            <div className={`flex items-center h-full absolute left-10 transition-opacity duration-200 whitespace-nowrap ${isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}>
+                {options.map((opt, idx) => (
+                    <React.Fragment key={opt.id}>
+                        {idx === 0 && <div className="w-[1px] h-4 bg-gray-200 mx-1" />}
+                        <button
+                            onClick={() => {
+                                onChange(opt.id);
+                                setIsOpen(false);
+                            }}
+                            className={`px-3 h-full flex items-center justify-center transition-all hover:bg-gray-50 group gap-2`}
+                            title={opt.id}
+                        >
+                            <span className={`flex items-center gap-2 text-[10px] font-bold uppercase tracking-wider transform group-hover:scale-105 transition-all ${current === opt.id ? 'text-blue-600 opacity-100' : 'text-gray-400 opacity-60 group-hover:opacity-100 group-hover:text-gray-600'}`}>
+                                <span className="text-sm">{opt.icon}</span>
+                                <span>{opt.label}</span>
+                            </span>
+                        </button>
+                        {idx < options.length - 1 && <div className="w-[1px] h-4 bg-gray-200" />}
+                    </React.Fragment>
+                ))}
+            </div>
+        </div>
+    );
 };
 
 export default function DeckEditorPage() {
@@ -55,6 +107,15 @@ export default function DeckEditorPage() {
     const [isAddingCategory, setIsAddingCategory] = useState(false);
     const [newCategoryName, setNewCategoryName] = useState('');
 
+    // Category Reordering
+    const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
+    const [showReorderModal, setShowReorderModal] = useState(false);
+
+    // Card Sorting & Reordering
+    const [sortMode, setSortMode] = useState<'alphabetical' | 'date' | 'custom'>('alphabetical');
+    const [customCardOrder, setCustomCardOrder] = useState<Record<string, string[]>>({}); // category -> cardId[]
+    const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
+
     // Animation state: cardId -> translateY value
     const [animatingCards, setAnimatingCards] = useState<Record<string, number>>({});
     const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
@@ -63,10 +124,19 @@ export default function DeckEditorPage() {
     const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
     const categoryDebounceTimer = useRef<NodeJS.Timeout | null>(null);
 
-    // Scryfall data cache: card_name -> { img: URL | null, typeLine?: string }
-    const scryfallCache = useRef<Record<string, { img: string | null; typeLine?: string }>>({});
+    // Scryfall data cache: card_name -> { images: string[]; typeLine?: string }
+    const scryfallCache = useRef<Record<string, { images: string[]; typeLine?: string }>>({});
 
     const { addToast } = useToast();
+
+    // expand grid categories handlers
+    const [expandedGrids, setExpandedGrids] = useState<Record<string, boolean>>({});
+    const toggleGridExpand = (category: string) => {
+        setExpandedGrids(prev => ({
+            ...prev,
+            [category]: !prev[category]
+        }));
+    };
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8787';
 
@@ -179,14 +249,14 @@ export default function DeckEditorPage() {
                         warnings.push(`"${card.card_name}" not found — closest match "${scryfallName}" added`);
                     }
                     validatedCards.push({ card_name: scryfallName, quantity: card.quantity, category });
-                    // Cache the image while we have it
-                    const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
-                    //scryfallCache.current[scryfallName] = imgUrl;
-                    scryfallCache.current[card.card_name] = {
-                        ...scryfallCache.current[card.card_name],
-                        img: data.image_uris?.normal || data.image_uris?.small || null,
-                        typeLine: data.type_line
-                    };
+
+                    // Handle dual faces
+                    const images = data.image_uris
+                        ? [data.image_uris.normal || data.image_uris.small]
+                        : (data.card_faces ? data.card_faces.map((f: any) => f.image_uris?.normal || f.image_uris?.small).filter(Boolean) : []);
+
+                    scryfallCache.current[scryfallName] = { images, typeLine: data.type_line };
+                    scryfallCache.current[card.card_name] = { images, typeLine: data.type_line };
                 } else {
                     warnings.push(`"${card.card_name}" not found on Scryfall — added as-is`);
                     validatedCards.push({ ...card, category: 'Uncategorized' });
@@ -233,6 +303,36 @@ export default function DeckEditorPage() {
         }
     };
 
+    // ── Category Cleanup ──
+    const handleCleanupCategory = useCallback(async (categoryName: string, currentCards: Card[]) => {
+        if (!categoryName || categoryName === 'Uncategorized') return;
+
+        // Check if there are any cards left in this category in the UPDATED card list
+        const hasCards = currentCards.some(c => c.category === categoryName);
+
+        if (!hasCards && customCategories.includes(categoryName)) {
+            // Auto-delete the category
+            const updatedCustom = customCategories.filter(cat => cat !== categoryName);
+            setCustomCategories(updatedCustom);
+            setCategoryOrder(prev => prev.filter(cat => cat !== categoryName));
+
+            try {
+                await fetch(`${apiUrl}/api/decks/${deckId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({
+                        name: deck?.name,
+                        custom_categories: JSON.stringify(updatedCustom)
+                    })
+                });
+                console.log(`Auto-cleaned category: ${categoryName}`);
+            } catch (err) {
+                console.error('Failed to persist auto-cleanup:', err);
+            }
+        }
+    }, [customCategories, apiUrl, deckId, deck?.name]);
+
     // ── Card Editing ──
     const handleUpdateCard = useCallback(async (card: Card, updates: Partial<Card>) => {
         const updated = { ...card, ...updates };
@@ -266,10 +366,17 @@ export default function DeckEditorPage() {
             });
             const data = await res.json();
             if (data.success) {
+                const updatedCards = deck?.cards ? deck.cards.filter(c => c.id !== cardId) : [];
+                const deletedCard = deck?.cards.find(c => c.id === cardId);
+
                 setDeck(prev => {
                     if (!prev) return prev;
-                    return { ...prev, cards: prev.cards.filter(c => c.id !== cardId) };
+                    return { ...prev, cards: updatedCards };
                 });
+
+                if (deletedCard?.category) {
+                    handleCleanupCategory(deletedCard.category, updatedCards);
+                }
             }
         } catch (err: any) {
             alert(err.message);
@@ -377,34 +484,151 @@ export default function DeckEditorPage() {
     const groupedCards = React.useMemo(() => {
         const groups: Record<string, Card[]> = {};
 
-        // Ensure all default categories exist in order
-        const defaults = ['Creatures', 'Instants', 'Sorceries', 'Enchantments', 'Artifacts', 'Planeswalkers', 'Lands', 'Other'];
-        defaults.forEach(cat => groups[cat] = []);
-
+        // 1. Group all cards
         deck?.cards.forEach(card => {
             const cat = card.category || 'Uncategorized';
             if (!groups[cat]) groups[cat] = [];
             groups[cat].push(card);
         });
 
-        // Add user created custom categories
+        // 2. Ensure all custom categories exist
         customCategories.forEach(cat => {
             if (!groups[cat]) groups[cat] = [];
         });
 
-        // Remove empty groups ONLY if they are default categories (automatic)
-        // Keep empty custom categories so the user can see/use them
-        Object.keys(groups).forEach(key => {
-            if (groups[key].length === 0 && !customCategories.includes(key)) {
-                delete groups[key];
+        // 3. Apply sorting within each group
+        Object.keys(groups).forEach(cat => {
+            if (sortMode === 'alphabetical') {
+                groups[cat].sort((a, b) => a.card_name.localeCompare(b.card_name));
+            } else if (sortMode === 'date') {
+                groups[cat].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+            } else if (sortMode === 'custom') {
+                const customOrder = customCardOrder[cat] || [];
+                if (customOrder.length > 0) {
+                    const orderMap = new Map(customOrder.map((id, idx) => [id, idx]));
+                    groups[cat].sort((a, b) => {
+                        const idxA = orderMap.has(a.id) ? orderMap.get(a.id)! : 999999;
+                        const idxB = orderMap.has(b.id) ? orderMap.get(b.id)! : 999999;
+                        return idxA - idxB;
+                    });
+                } else {
+                    groups[cat].sort((a, b) => a.card_name.localeCompare(b.card_name));
+                }
             }
         });
 
-        return groups;
-    }, [deck?.cards, customCategories]);
+        // 4. Convert to array and sort categories
+        let categories = Object.keys(groups);
+
+        if (categoryOrder.length > 0) {
+            // Respect manual order, but handle new categories by putting them at the end
+            categories.sort((a, b) => {
+                const idxA = categoryOrder.indexOf(a);
+                const idxB = categoryOrder.indexOf(b);
+
+                if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+                if (idxA !== -1) return -1;
+                if (idxB !== -1) return 1;
+                return a.localeCompare(b);
+            });
+        } else {
+            // Default to alphabetical
+            categories.sort((a, b) => a.localeCompare(b));
+        }
+
+        return categories.map(cat => ({
+            category: cat,
+            cards: groups[cat]
+        }));
+    }, [deck?.cards, customCategories, categoryOrder, sortMode, customCardOrder]);
+
+
+
+    const handleRenameCategory = useCallback(async (oldName: string, newNameRaw: string) => {
+        const newName = newNameRaw.trim().toUpperCase();
+        if (!newName || oldName === newName) return;
+
+        // 1. Update cards locally
+        setDeck(prev => {
+            if (!prev) return prev;
+            return {
+                ...prev,
+                cards: prev.cards.map(card =>
+                    card.category === oldName ? { ...card, category: newName } : card
+                )
+            };
+        });
+
+        // 2. Update custom categories & manual order locally
+        const updatedCustom = customCategories.map(cat => cat === oldName ? newName : cat);
+        setCustomCategories(updatedCustom);
+        setCategoryOrder(prev => prev.map(cat => cat === oldName ? newName : cat));
+
+        // 3. Persist to backend (deck-level for custom_categories and card-level for category updates)
+        try {
+            // Update cards that had the category
+            const cardsToUpdate = deck?.cards.filter(c => c.category === oldName) || [];
+            await Promise.all(cardsToUpdate.map(card =>
+                fetch(`${apiUrl}/api/decks/${deckId}/cards/${card.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'include',
+                    body: JSON.stringify({ category: newName })
+                })
+            ));
+
+            // Update deck custom_categories
+            await fetch(`${apiUrl}/api/decks/${deckId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    name: deck?.name,
+                    custom_categories: JSON.stringify(updatedCustom)
+                })
+            });
+
+            addToast(`Category renamed and persisted!`, 'success');
+        } catch (err) {
+            console.error('Rename persistence error:', err);
+            addToast('Updated locally, but failed to save to server', 'warning');
+        }
+    }, [addToast, customCategories, deck, apiUrl, deckId]);
+
+    const handleDeleteCategory = useCallback(async (name: string) => {
+        // 1. Check if category is empty
+        const hasCards = (deck?.cards || []).some(c => c.category === name);
+        if (hasCards) {
+            addToast(`Cannot delete category "${name}" because it still contains cards.`, 'error');
+            return;
+        }
+
+        // 2. Update locally
+        const updatedCustom = customCategories.filter(cat => cat !== name);
+        setCustomCategories(updatedCustom);
+        setCategoryOrder(prev => prev.filter(cat => cat !== name));
+
+        // 3. Persist to backend
+        try {
+            await fetch(`${apiUrl}/api/decks/${deckId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({
+                    name: deck?.name,
+                    custom_categories: JSON.stringify(updatedCustom)
+                })
+            });
+            addToast(`Category "${name}" removed.`, 'success');
+        } catch (err) {
+            console.error('Delete category error:', err);
+            addToast('Removed locally, but failed to save to server', 'warning');
+        }
+    }, [deck, customCategories, apiUrl, deckId, addToast]);
+
 
     const handleConfirmAddCategory = async () => {
-        const name = newCategoryName.trim();
+        let name = newCategoryName.trim().toUpperCase();
         if (name) {
             if (!customCategories.includes(name)) {
                 const updated = [...customCategories, name];
@@ -435,16 +659,55 @@ export default function DeckEditorPage() {
 
     const handleDragStart = (e: React.DragEvent, card: Card) => {
         e.dataTransfer.setData('cardId', card.id);
+        e.dataTransfer.setData('sourceCategory', card.category || 'Uncategorized');
+        setDraggedCardId(card.id);
     };
 
-    const handleDropOnCategory = async (e: React.DragEvent, targetCategory: string) => {
+    const handleCardDrop = async (e: React.DragEvent, targetCategory: string, dropIndex?: number) => {
         e.preventDefault();
+        setDraggedCardId(null);
         const cardId = e.dataTransfer.getData('cardId');
+        const sourceCategory = e.dataTransfer.getData('sourceCategory');
+
         const card = deck?.cards.find(c => c.id === cardId);
-        if (card && card.category !== targetCategory) {
+        if (!card) return;
+
+        // 1. If moving to a DIFFERENT category
+        if (card.category !== targetCategory) {
+            const oldCategory = card.category;
             await handleUpdateCard(card, { category: targetCategory });
             addToast(`Moved ${card.card_name} to ${targetCategory}`, 'success');
+
+            if (oldCategory) {
+                const updatedCards = deck?.cards ? deck.cards.map(c =>
+                    c.id === cardId ? { ...c, category: targetCategory } : c
+                ) : [];
+                handleCleanupCategory(oldCategory, updatedCards);
+            }
         }
+
+        // 2. Handle inner reordering or if we just want to set the custom order
+        // We always update the custom order for the target category when a drop happens
+        setSortMode('custom');
+
+        setCustomCardOrder(prev => {
+            const currentOrder = groupedCards.find(g => g.category === targetCategory)?.cards.map(c => c.id) || [];
+
+            // Remove card from its current position in target category if it was already there
+            let newOrder = currentOrder.filter(id => id !== cardId);
+
+            // Insert at drop index
+            if (typeof dropIndex === 'number') {
+                newOrder.splice(dropIndex, 0, cardId);
+            } else {
+                newOrder.push(cardId);
+            }
+
+            return {
+                ...prev,
+                [targetCategory]: newOrder
+            };
+        });
     };
 
     const cardQuantities = React.useMemo(() => {
@@ -536,9 +799,11 @@ export default function DeckEditorPage() {
                         const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(card.card_name)}`);
                         if (res.ok) {
                             const data = await res.json();
+                            const images = data.image_uris
+                                ? [data.image_uris.normal || data.image_uris.small]
+                                : (data.card_faces ? data.card_faces.map((f: any) => f.image_uris?.normal || f.image_uris?.small).filter(Boolean) : []);
                             scryfallCache.current[card.card_name] = {
-                                ...scryfallCache.current[card.card_name],
-                                img: data.image_uris?.normal || data.image_uris?.small || null,
+                                images,
                                 typeLine: data.type_line
                             };
                             targetCategory = getCategoryFromType(data.type_line);
@@ -550,6 +815,8 @@ export default function DeckEditorPage() {
             }
 
             if (targetCategory && targetCategory !== card.category) {
+                const oldCategory = card.category;
+
                 // Debounce the actual API call
                 if (categoryDebounceTimer.current) clearTimeout(categoryDebounceTimer.current);
 
@@ -565,6 +832,13 @@ export default function DeckEditorPage() {
                 categoryDebounceTimer.current = setTimeout(async () => {
                     await handleUpdateCard(card, { category: targetCategory });
                     addToast(`Updated ${card.card_name} to ${targetCategory}`, 'success');
+
+                    if (oldCategory) {
+                        const updatedCards = deck.cards.map(c =>
+                            c.id === card.id ? { ...c, category: targetCategory } : c
+                        );
+                        handleCleanupCategory(oldCategory, updatedCards);
+                    }
                 }, 300);
             }
         };
@@ -700,7 +974,7 @@ export default function DeckEditorPage() {
     }
 
     // Put this right before your return statement
-    const hasSingleCategory = Object.keys(groupedCards).length === 1;
+    const hasSingleCategory = groupedCards.length === 1;
 
     return (
         <main className="min-h-screen">
@@ -815,6 +1089,20 @@ export default function DeckEditorPage() {
                     </div>
 
                     <button
+                        onClick={() => setShowReorderModal(true)}
+                        className="bg-white border border-gray-200 text-gray-600 hover:text-blue-600 hover:border-blue-300 font-bold rounded-md text-xs px-3 py-2 transition-all cursor-pointer shadow-sm active:scale-95 flex items-center gap-1 uppercase tracking-tight"
+                        title="Reorder Categories"
+                    >
+                        <span>Categories</span>
+                        <span>⇅</span>
+                    </button>
+
+                    <SortSelector
+                        current={sortMode}
+                        onChange={setSortMode}
+                    />
+
+                    <button
                         onClick={() => setShowSearchModal(true)}
                         className="bg-blue-500 hover:bg-blue-600 text-white font-medium rounded-md text-sm px-4 py-2 transition-colors cursor-pointer"
                     >
@@ -857,8 +1145,6 @@ export default function DeckEditorPage() {
                         </div>
                     </div>
                 </div>
-
-                {/* Import Modal */}
                 {showImport && (
                     <ImportDeckModal
                         onClose={() => setShowImport(false)}
@@ -885,72 +1171,73 @@ export default function DeckEditorPage() {
                             📋 Import Decklist
                         </button>
                     </div>
+                ) : viewMode === 'table' ? (
+                    /* Unified Table View for perfect column alignment */
+                    <div className="bg-white/50 backdrop-blur-sm rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+                        <table className="min-w-full">
+                            <thead className="hidden">
+                                <tr>
+                                    <th className="w-8"></th>
+                                    <th className="w-12">#</th>
+                                    <th className="w-10">👁</th>
+                                    <th className="w-20">Qty</th>
+                                    <th>Name</th>
+                                    <th className="w-20 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            {groupedCards.map(({ category, cards }) => (
+                                <TableView
+                                    key={category}
+                                    categoryName={category}
+                                    cards={cards}
+                                    draggedCardId={draggedCardId}
+                                    onUpdate={handleUpdateCard}
+                                    onDelete={handleDeleteCard}
+                                    rowRefs={rowRefs}
+                                    scryfallCache={scryfallCache}
+                                    onDragStart={handleDragStart}
+                                    onDragEnd={() => setDraggedCardId(null)}
+                                    onHoverCard={setHoveredCardId}
+                                    onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
+                                />
+                            ))}
+                        </table>
+                    </div>
                 ) : (
-                    <div
-                        className={
-                            viewMode === 'grid'
-                                ? `grid grid-cols-1 ${hasSingleCategory ? '' : 'xl:grid-cols-2'} gap-8`
-                                : "space-y-8"
-                        }
-                    >
-                        {Object.entries(groupedCards).map(([category, cards]) => (
+                    /* Categorized Grid View Shelves */
+                    <div className={`grid grid-cols-1 ${hasSingleCategory ? '' : 'xl:grid-cols-2'} gap-8`}>
+                        {groupedCards.map(({ category, cards }) => (
                             <div
                                 key={category}
                                 className="bg-white/50 backdrop-blur-sm rounded-xl border border-gray-100 shadow-sm overflow-hidden"
                                 onDragOver={(e) => e.preventDefault()}
-                                onDrop={(e) => handleDropOnCategory(e, category)}
+                                onDrop={(e) => handleCardDrop(e, category)}
                             >
                                 <div className="bg-blue-50/80 px-4 py-2 border-b border-gray-100 flex justify-between items-center group/cat">
                                     <h3 className="text-sm font-bold text-blue-800 uppercase tracking-wider flex items-center gap-2">
                                         📁 {category}
-                                        <span className="text-xs font-medium text-blue-400 normal-case">({cards.reduce((s, c) => s + c.quantity, 0)} cards)</span>
+                                        <span className="text-xs font-medium text-blue-400 normal-case">({cards.reduce((s: number, c: Card) => s + c.quantity, 0)} cards)</span>
                                     </h3>
+                                    <button
+                                        onClick={() => toggleGridExpand(category)}
+                                        className="text-xs font-bold text-blue-600 bg-white/60 hover:bg-white px-2 py-1 rounded shadow-sm transition-colors"
+                                    >
+                                        {expandedGrids[category] ? '⏶ Collapse' : '⏵ Expand'}
+                                    </button>
                                 </div>
                                 <div className="p-1">
-                                    {viewMode === 'table' ? (
-                                        <table className="min-w-full divide-y divide-gray-100">
-                                            <thead className="hidden">
-                                                <tr>
-                                                    <th className="w-12">#</th>
-                                                    <th className="w-10">👁</th>
-                                                    <th className="w-20">Qty</th>
-                                                    <th>Name</th>
-                                                    <th className="w-32">Order</th>
-                                                    <th className="w-20">Actions</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-gray-50">
-                                                {cards.map((card, idx) => (
-                                                    <CardRow
-                                                        key={card.id}
-                                                        card={card}
-                                                        index={idx}
-                                                        isFirst={idx === 0}
-                                                        isLast={idx === cards.length - 1}
-                                                        onUpdate={handleUpdateCard}
-                                                        onDelete={handleDeleteCard}
-                                                        onMove={handleMoveCard}
-                                                        animateY={0}
-                                                        rowRefs={rowRefs}
-                                                        scryfallCache={scryfallCache}
-                                                        onDragStart={handleDragStart}
-                                                        onHover={() => setHoveredCardId(card.id)}
-                                                        onLeave={() => setHoveredCardId(null)}
-                                                    />
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    ) : (
-                                        <GridView
-                                            cards={cards}
-                                            onUpdate={handleUpdateCard}
-                                            onDelete={handleDeleteCard}
-                                            scryfallCache={scryfallCache}
-                                            scale={gridScale}
-                                            onDragStart={handleDragStart}
-                                            onHoverCard={setHoveredCardId}
-                                        />
-                                    )}
+                                    <GridView
+                                        cards={cards}
+                                        onUpdate={handleUpdateCard}
+                                        onDelete={handleDeleteCard}
+                                        scryfallCache={scryfallCache}
+                                        scale={gridScale}
+                                        onDragStart={handleDragStart}
+                                        onHoverCard={setHoveredCardId}
+                                        onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
+                                        draggedCardId={draggedCardId}
+                                        isExpanded={!!expandedGrids[category]}
+                                    />
                                     {cards.length === 0 && (
                                         <div className="py-8 text-center text-gray-400 text-sm italic">
                                             Drop cards here to move them to this category
@@ -968,7 +1255,7 @@ export default function DeckEditorPage() {
                 <ProxySheet
                     cards={deck.cards}
                     scryfallCache={Object.fromEntries(
-                        Object.entries(scryfallCache.current).map(([name, data]) => [name, data.img])
+                        Object.entries(scryfallCache.current).map(([name, data]) => [name, data.images[0]])
                     )}
                     onClose={() => setShowProxySheet(false)}
                 />
@@ -999,69 +1286,403 @@ export default function DeckEditorPage() {
                     </div>
                 </div>
             )}
+            {showReorderModal && (
+                <CategoryReorderModal
+                    categories={groupedCards.map(g => g.category)}
+                    onOrderChange={setCategoryOrder}
+                    onRenameCategory={handleRenameCategory}
+                    onDeleteCategory={handleDeleteCategory}
+                    onClose={() => setShowReorderModal(false)}
+                />
+            )}
         </main>
     );
 }
 
+function CategoryReorderModal({ categories, onOrderChange, onRenameCategory, onDeleteCategory, onClose }: {
+    categories: string[];
+    onOrderChange: (newOrder: string[]) => void;
+    onRenameCategory: (oldName: string, newName: string) => void;
+    onDeleteCategory: (name: string) => void;
+    onClose: () => void;
+}) {
+    const [localOrder, setLocalOrder] = useState(categories);
+    const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+    const [editingIndex, setEditingIndex] = useState<number | null>(null);
+    const [editValue, setEditValue] = useState('');
+
+    const handleDragStart = (idx: number) => {
+        if (editingIndex !== null) return;
+        setDraggedIndex(idx);
+    };
+
+    const handleDragOver = (e: React.DragEvent, idx: number) => {
+        e.preventDefault();
+        if (draggedIndex === null || draggedIndex === idx || editingIndex !== null) return;
+
+        const newOrder = [...localOrder];
+        const draggedItem = newOrder[draggedIndex];
+        newOrder.splice(draggedIndex, 1);
+        newOrder.splice(idx, 0, draggedItem);
+        setLocalOrder(newOrder);
+        setDraggedIndex(idx);
+    };
+
+    const handleStartRename = (idx: number, name: string) => {
+        setEditingIndex(idx);
+        setEditValue(name);
+    };
+
+    const handleConfirmRename = (idx: number) => {
+        const oldName = localOrder[idx];
+        const newName = editValue.trim().toUpperCase();
+        if (newName && oldName !== newName) {
+            onRenameCategory(oldName, newName);
+            const nextOrder = [...localOrder];
+            nextOrder[idx] = newName;
+            setLocalOrder(nextOrder);
+        }
+        setEditingIndex(null);
+    };
+
+    const handleDelete = (name: string) => {
+        onDeleteCategory(name);
+        setLocalOrder(prev => prev.filter(c => c !== name));
+    };
+
+    const handleSave = () => {
+        onOrderChange(localOrder);
+        onClose();
+    };
+
+    return createPortal(
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[200] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200">
+                <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                    <div>
+                        <h2 className="text-lg font-bold text-gray-900">Reorder & Rename</h2>
+                        <p className="text-xs text-gray-400 mt-1">Drag to reorder, use pencil to rename</p>
+                    </div>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 transition-colors">✕</button>
+                </div>
+
+                <div className="p-4 max-h-[60vh] overflow-y-auto space-y-2 custom-scrollbar">
+                    {localOrder.map((cat, idx) => (
+                        <div
+                            key={cat}
+                            draggable={editingIndex === null}
+                            onDragStart={() => handleDragStart(idx)}
+                            onDragOver={(e) => handleDragOver(e, idx)}
+                            onDragEnd={() => setDraggedIndex(null)}
+                            className={`flex items-center gap-3 p-3 bg-gray-50 rounded-lg border transition-all ${editingIndex === null ? 'cursor-grab active:cursor-grabbing hover:border-blue-300 hover:bg-blue-50/30' : ''
+                                } ${draggedIndex === idx ? 'opacity-30 border-blue-500 scale-95' : ''
+                                }`}
+                        >
+                            <span className="text-gray-400 font-mono text-xs">⠿</span>
+
+                            {editingIndex === idx ? (
+                                <div className="flex-1 flex items-center gap-2">
+                                    <input
+                                        autoFocus
+                                        value={editValue}
+                                        onChange={(e) => setEditValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleConfirmRename(idx);
+                                            if (e.key === 'Escape') setEditingIndex(null);
+                                        }}
+                                        className="flex-1 px-2 py-1 bg-white border border-blue-500 rounded text-sm font-semibold outline-none shadow-sm"
+                                    />
+                                    <button
+                                        onClick={() => handleConfirmRename(idx)}
+                                        className="text-green-600 hover:text-green-700 p-1"
+                                        title="Confirm"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+                                    </button>
+                                    <button
+                                        onClick={() => setEditingIndex(null)}
+                                        className="text-red-500 hover:text-red-700 p-1"
+                                        title="Cancel"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                                    </button>
+                                </div>
+                            ) : (
+                                <>
+                                    <span className="flex-1 text-sm font-semibold text-gray-700">{cat}</span>
+                                    <div className="flex items-center gap-1">
+                                        <button
+                                            onClick={() => handleStartRename(idx, cat)}
+                                            className="text-gray-400 hover:text-blue-600 p-1 transition-colors"
+                                            title="Rename category"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                                        </button>
+                                        <button
+                                            onClick={() => handleDelete(cat)}
+                                            className="text-gray-400 hover:text-red-500 p-1 transition-colors"
+                                            title="Delete category"
+                                        >
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                                        </button>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    ))}
+                </div>
+
+                <div className="p-6 bg-gray-50 border-t border-gray-100 flex gap-3">
+                    <button
+                        onClick={onClose}
+                        className="flex-1 py-2 px-4 border border-gray-200 text-gray-600 font-semibold rounded-lg hover:bg-white transition-colors"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        onClick={handleSave}
+                        className="flex-1 py-2 px-4 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-all shadow-md active:scale-95"
+                    >
+                        Apply Order
+                    </button>
+                </div>
+            </div>
+        </div>,
+        document.body
+    );
+}
+
 // ── Grid View Components ──
-function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHoverCard }: {
+function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHoverCard, onDrop, draggedCardId, isExpanded }: {
     cards: Card[];
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
-    scryfallCache: React.MutableRefObject<Record<string, { img: string | null; typeLine?: string }>>;
+    scryfallCache: React.MutableRefObject<Record<string, { images: string[]; typeLine?: string }>>;
     scale: number;
     onDragStart: (e: React.DragEvent, card: Card) => void;
     onHoverCard: (id: string | null) => void;
+    onDrop: (e: React.DragEvent, index: number) => void;
+    draggedCardId: string | null;
+    isExpanded: boolean;
 }) {
+    const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+    const handleDragOver = (e: React.DragEvent, index: number) => {
+        e.preventDefault();
+        setDragOverIndex(index);
+    };
+
+    useEffect(() => {
+        if (!draggedCardId) {
+            setDragOverIndex(null);
+        }
+    }, [draggedCardId]);
+
+    const handleDrop = (e: React.DragEvent, index: number) => {
+        e.stopPropagation();
+        setDragOverIndex(null);
+        onDrop(e, index);
+    };
+
     // Standard base 100px
     const cardWidth = Math.round(100 * scale);
+    // Calculate the class dynamically based on the prop
+    const containerClass = isExpanded
+        ? "flex flex-wrap gap-4 p-4 min-h-[200px]"
+        : "flex flex-row overflow-x-auto pb-6 gap-4 p-4 min-h-[200px] custom-scrollbar";
 
     return (
         <div
-            className="flex gap-4 p-4 overflow-x-auto overflow-y-hidden custom-scrollbar pb-6"
-            style={{
-                minHeight: Math.round(150 * scale) // Ensure container doesn't collapse during loading/empty
+            className={containerClass}
+            onMouseLeave={() => setDragOverIndex(null)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+                e.stopPropagation();
+                if (dragOverIndex !== null) {
+                    onDrop(e, dragOverIndex);
+                }
             }}
         >
-            {cards.map(card => (
-                <GridCard
-                    key={card.id}
-                    card={card}
-                    onUpdate={onUpdate}
-                    onDelete={onDelete}
-                    scryfallCache={scryfallCache}
-                    scale={scale}
-                    onDragStart={onDragStart}
-                    onHover={() => onHoverCard(card.id)}
-                    onLeave={() => onHoverCard(null)}
-                />
-            ))}
+            {cards.map((card, idx) => {
+                let shift = 0;
+                if (dragOverIndex !== null && idx >= dragOverIndex) {
+                    shift = Math.round(100 * scale) + 16; // width + gap
+                }
+
+                return (
+                    <GridCard
+                        key={card.id}
+                        card={card}
+                        onUpdate={onUpdate}
+                        onDelete={onDelete}
+                        scryfallCache={scryfallCache}
+                        scale={scale}
+                        index={idx}
+                        shift={shift}
+                        onDragStart={onDragStart}
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop}
+                        onHover={() => onHoverCard(card.id)}
+                        onLeave={() => onHoverCard(null)}
+                    />
+                );
+            })}
         </div>
     );
 }
 
-function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart, onHover, onLeave }: {
+// ── Table View Components ──
+// ── Table View Components ──
+function TableView({ categoryName, cards, draggedCardId, onUpdate, onDelete, rowRefs, scryfallCache, onDragStart, onDragEnd, onHoverCard, onDrop }: {
+    categoryName: string;
+    cards: Card[];
+    draggedCardId: string | null;
+    onUpdate: (card: Card, updates: Partial<Card>) => void;
+    onDelete: (id: string) => void;
+    rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>;
+    scryfallCache: React.MutableRefObject<Record<string, { images: string[]; typeLine?: string }>>;
+    onDragStart: (e: React.DragEvent, card: Card) => void;
+    onDragEnd: () => void;
+    onHoverCard: (id: string | null) => void;
+    onDrop: (e: React.DragEvent, index: number) => void;
+}) {
+    const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+    useEffect(() => {
+        if (!draggedCardId) {
+            setDragOverIndex(null);
+        }
+    }, [draggedCardId]);
+
+    const handleDragOver = (e: React.DragEvent, index: number) => {
+        e.preventDefault();
+        setDragOverIndex(index);
+    };
+
+    const handleDrop = (e: React.DragEvent, index: number) => {
+        e.stopPropagation();
+        setDragOverIndex(null);
+        onDrop(e, index);
+    };
+
+    const draggedIndexInThisCat = draggedCardId ? cards.findIndex(c => c.id === draggedCardId) : -1;
+
+    return (
+        <tbody
+            className="divide-y divide-gray-50"
+            onMouseLeave={() => setDragOverIndex(null)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={(e) => {
+                e.stopPropagation();
+                if (dragOverIndex !== null) {
+                    onDrop(e, dragOverIndex);
+                }
+            }}
+        >
+            {/* Category Header Row */}
+            <tr className="bg-blue-50/80 group/cat sticky top-0 z-20">
+                <td colSpan={6} className="px-4 py-2 border-b border-gray-100">
+                    <h3 className="text-sm font-bold text-blue-800 uppercase tracking-wider flex items-center gap-2">
+                        📁 {categoryName}
+                        <span className="text-xs font-medium text-blue-400 normal-case">({cards.reduce((s: number, c: Card) => s + c.quantity, 0)} cards)</span>
+                    </h3>
+                </td>
+            </tr>
+
+            {cards.length === 0 ? (
+                <tr>
+                    <td colSpan={6} className="py-8 text-center text-gray-400 text-sm italic bg-white/30">
+                        Drop cards here to move them to this category
+                    </td>
+                </tr>
+            ) : (
+                cards.map((card, idx) => {
+                    let shiftY = 0;
+                    const rowHeight = 45; // Match fixed height in CardRow
+                    const isDragged = card.id === draggedCardId;
+
+                    if (dragOverIndex !== null) {
+                        if (isDragged) {
+                            // The row being dragged slides to the target slot
+                            shiftY = (dragOverIndex - idx) * rowHeight;
+                        } else if (draggedIndexInThisCat !== -1) {
+                            // Fluid swap logic within the same category
+                            if (draggedIndexInThisCat < dragOverIndex) {
+                                // Dragging DOWN: rows between original and target shift UP
+                                if (idx > draggedIndexInThisCat && idx <= dragOverIndex) {
+                                    shiftY = -rowHeight;
+                                }
+                            } else if (draggedIndexInThisCat > dragOverIndex) {
+                                // Dragging UP: rows between target and original shift DOWN
+                                if (idx >= dragOverIndex && idx < draggedIndexInThisCat) {
+                                    shiftY = rowHeight;
+                                }
+                            }
+                        } else {
+                            // If dragging from ANOTHER category (draggedIndexInThisCat === -1)
+                            // Standard "open gap" logic
+                            if (idx >= dragOverIndex) {
+                                shiftY = rowHeight;
+                            }
+                        }
+                    }
+
+                    return (
+                        <CardRow
+                            key={card.id}
+                            card={card}
+                            index={idx}
+                            isFirst={idx === 0}
+                            isLast={idx === cards.length - 1}
+                            shiftY={shiftY}
+                            isDragged={isDragged}
+                            onUpdate={onUpdate}
+                            onDelete={onDelete}
+                            rowRefs={rowRefs}
+                            scryfallCache={scryfallCache}
+                            onDragStart={onDragStart}
+                            onDragEnd={onDragEnd}
+                            onDragEnter={(e) => !isDragged && handleDragOver(e, idx)}
+                            onDragOver={(e) => !isDragged && handleDragOver(e, idx)}
+                            onDrop={(e) => !isDragged && handleDrop(e, idx)}
+                            onHover={() => onHoverCard(card.id)}
+                            onLeave={() => onHoverCard(null)}
+                        />
+                    );
+                })
+            )}
+        </tbody>
+    );
+}
+
+function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, index, shift, onDragStart, onDragOver, onDrop, onHover, onLeave }: {
     card: Card;
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
-    scryfallCache: React.MutableRefObject<Record<string, { img: string | null; typeLine?: string }>>;
+    scryfallCache: React.MutableRefObject<Record<string, { images: string[]; typeLine?: string }>>;
     scale: number;
+    index: number;
+    shift: number;
     onDragStart: (e: React.DragEvent, card: Card) => void;
+    onDragOver: (e: React.DragEvent, index: number) => void;
+    onDrop: (e: React.DragEvent, index: number) => void;
     onHover: () => void;
     onLeave: () => void;
 }) {
-    const [img, setImg] = useState<string | null>(null);
+    const [images, setImages] = useState<string[]>([]);
+    const [faceIndex, setFaceIndex] = useState(0);
     const [loading, setLoading] = useState(false);
+    const [isFlipping, setIsFlipping] = useState(false);
 
     useEffect(() => {
         if (card.custom_image) {
-            setImg(card.custom_image);
+            setImages([card.custom_image]);
             return;
         }
         const fetchImg = async () => {
             const name = card.card_name;
             if (scryfallCache.current[name] !== undefined) {
-                setImg(scryfallCache.current[name].img);
+                setImages(scryfallCache.current[name].images);
                 return;
             }
             setLoading(true);
@@ -1069,16 +1690,18 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart,
                 const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
                 if (res.ok) {
                     const data = await res.json();
-                    const url = data.image_uris?.normal || data.image_uris?.small || null;
-                    scryfallCache.current[name] = { img: url, typeLine: data.type_line };
-                    setImg(url);
+                    const imgs = data.image_uris
+                        ? [data.image_uris.normal || data.image_uris.small]
+                        : (data.card_faces ? data.card_faces.map((f: any) => f.image_uris?.normal || f.image_uris?.small).filter(Boolean) : []);
+                    scryfallCache.current[name] = { images: imgs, typeLine: data.type_line };
+                    setImages(imgs);
                 } else {
-                    scryfallCache.current[name] = { img: null };
-                    setImg(null);
+                    scryfallCache.current[name] = { images: [] };
+                    setImages([]);
                 }
             } catch {
-                scryfallCache.current[name] = { img: null };
-                setImg(null);
+                scryfallCache.current[name] = { images: [] };
+                setImages([]);
             } finally {
                 setLoading(false);
             }
@@ -1086,14 +1709,30 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart,
         fetchImg();
     }, [card.card_name, card.custom_image, scryfallCache]);
 
+    const handleFlip = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        if (isFlipping) return;
+
+        setIsFlipping(true);
+        setTimeout(() => {
+            setFaceIndex((prev) => (prev + 1) % images.length);
+            setIsFlipping(false);
+        }, 150);
+    };
+
     return (
         <div
             draggable
             onDragStart={(e) => onDragStart(e, card)}
+            onDragOver={(e) => onDragOver(e, index)}
+            onDrop={(e) => onDrop(e, index)}
             onMouseEnter={onHover}
             onMouseLeave={onLeave}
-            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing flex-shrink-0"
-            style={{ width: Math.round(100 * scale) }}
+            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all duration-300 hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing flex-shrink-0"
+            style={{
+                width: Math.round(100 * scale),
+                transform: shift ? `translateX(${shift}px)` : undefined,
+            }}
         >
             {/* Image Container */}
             <div className="aspect-[63/88] bg-gray-50 relative overflow-hidden flex items-center justify-center">
@@ -1101,14 +1740,26 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart,
                     <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
                 ) : (
                     <img
-                        src={img || "/placeholder.png"}
+                        src={images[faceIndex] || "/placeholder.png"}
                         alt={card.card_name}
-                        className="w-full h-full object-cover select-none"
+                        className="w-full h-full object-cover select-none transition-transform duration-150 ease-in-out"
+                        style={{ transform: isFlipping ? 'scaleX(0)' : 'scaleX(1)' }}
                     />
                 )}
 
+                {/* Flip Button Overlay */}
+                {images.length > 1 && (
+                    <button
+                        onClick={handleFlip}
+                        className="absolute bottom-2 right-2 bg-purple-600/80 hover:bg-purple-600 text-white w-8 h-8 flex items-center justify-center rounded-full backdrop-blur-md border border-white/20 transition-all active:scale-90 z-20 shadow-lg"
+                        title="Flip card"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M7 21l-4-4 4-4" /><path d="M3 17h18" /><path d="M17 3l4 4-4 4" /><path d="M21 7H3" /></svg>
+                    </button>
+                )}
+
                 {/* Overlay Controls */}
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2">
+                <div className="absolute inset-0 bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-between p-2 ">
                     <button
                         onClick={() => onDelete(card.id)}
                         className="self-end bg-red-600/90 hover:bg-red-600 text-white w-6 h-6 flex items-center justify-center rounded transition-colors text-xs"
@@ -1159,28 +1810,35 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, onDragStart,
     );
 }
 
-// ── Inline Editable Card Row ──
-function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, animateY, rowRefs, scryfallCache, onDragStart, onHover, onLeave }: {
+function CardRow({ card, index, isFirst, isLast, shiftY, isDragged, onUpdate, onDelete, rowRefs, scryfallCache, onDragStart, onDragEnd, onDragEnter, onDragOver, onDrop, onHover, onLeave }: {
     card: Card;
     index: number;
     isFirst: boolean;
     isLast: boolean;
+    shiftY: number;
+    isDragged: boolean;
     onUpdate: (card: Card, updates: Partial<Card>) => void;
     onDelete: (id: string) => void;
-    onMove: (card: Card, direction: 'up' | 'down') => void;
-    animateY: number;
     rowRefs: React.MutableRefObject<Record<string, HTMLTableRowElement | null>>;
-    scryfallCache: React.MutableRefObject<Record<string, { img: string | null; typeLine?: string }>>;
+    scryfallCache: React.MutableRefObject<Record<string, { images: string[]; typeLine?: string }>>;
     onDragStart: (e: React.DragEvent, card: Card) => void;
+    onDragEnd: () => void;
+    onDragEnter: (e: React.DragEvent, index: number) => void;
+    onDragOver: (e: React.DragEvent, index: number) => void;
+    onDrop: (e: React.DragEvent, index: number) => void;
     onHover: () => void;
     onLeave: () => void;
 }) {
     const [editingName, setEditingName] = useState(false);
     const [nameVal, setNameVal] = useState(card.card_name);
-    const [previewImg, setPreviewImg] = useState<string | null>(null);
+    const [previewImages, setPreviewImages] = useState<string[]>([]);
+    const [faceIndex, setFaceIndex] = useState(0);
     const [previewPos, setPreviewPos] = useState({ x: 0, y: 0 });
     const [previewLoading, setPreviewLoading] = useState(false);
     const [showPreview, setShowPreview] = useState(false);
+    const [isFlipping, setIsFlipping] = useState(false);
+    const [showFlipHint, setShowFlipHint] = useState(false);
+    const flipHintTimer = useRef<NodeJS.Timeout | null>(null);
 
     const handleNameSave = () => {
         if (nameVal.trim() && nameVal !== card.card_name) {
@@ -1192,31 +1850,43 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
     const handlePreviewEnter = async () => {
         setShowPreview(true);
         if (card.custom_image) {
-            setPreviewImg(card.custom_image);
+            setPreviewImages([card.custom_image]);
             return;
         }
         const name = card.card_name;
         // Check cache first
         if (scryfallCache.current[name] !== undefined) {
-            setPreviewImg(scryfallCache.current[name].img);
+            const imgs = scryfallCache.current[name].images;
+            setPreviewImages(imgs);
+            if (imgs.length > 1) {
+                setShowFlipHint(true);
+                if (flipHintTimer.current) clearTimeout(flipHintTimer.current);
+                flipHintTimer.current = setTimeout(() => setShowFlipHint(false), 3000);
+            }
             return;
         }
         setPreviewLoading(true);
         try {
-            console.log(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
             const res = await fetch(`https://api.scryfall.com/cards/named?fuzzy=${encodeURIComponent(name)}`);
             if (res.ok) {
                 const data = await res.json();
-                const imgUrl = data.image_uris?.normal || data.image_uris?.small || null;
-                scryfallCache.current[name] = { img: imgUrl, typeLine: data.type_line };
-                setPreviewImg(imgUrl);
+                const imgs = data.image_uris
+                    ? [data.image_uris.normal || data.image_uris.small]
+                    : (data.card_faces ? data.card_faces.map((f: any) => f.image_uris?.normal || f.image_uris?.small).filter(Boolean) : []);
+                scryfallCache.current[name] = { images: imgs, typeLine: data.type_line };
+                setPreviewImages(imgs);
+                if (imgs.length > 1) {
+                    setShowFlipHint(true);
+                    if (flipHintTimer.current) clearTimeout(flipHintTimer.current);
+                    flipHintTimer.current = setTimeout(() => setShowFlipHint(false), 3000);
+                }
             } else {
-                scryfallCache.current[name] = { img: null };
-                setPreviewImg(null);
+                scryfallCache.current[name] = { images: [] };
+                setPreviewImages([]);
             }
         } catch {
-            scryfallCache.current[name] = { img: null };
-            setPreviewImg(null);
+            scryfallCache.current[name] = { images: [] };
+            setPreviewImages([]);
         } finally {
             setPreviewLoading(false);
         }
@@ -1226,27 +1896,49 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
         setPreviewPos({ x: e.clientX - 270, y: e.clientY - 100 });
     };
 
+    const handleToggleFlip = (e: React.MouseEvent) => {
+        if (previewImages.length > 1 && !isFlipping) {
+            e.stopPropagation();
+            setIsFlipping(true);
+            setTimeout(() => {
+                setFaceIndex(prev => (prev + 1) % previewImages.length);
+                setIsFlipping(false);
+            }, 150);
+        }
+    };
+
     const handlePreviewLeave = () => {
         setShowPreview(false);
-        setPreviewImg(null);
+        setPreviewImages([]);
+        setFaceIndex(0);
         setPreviewLoading(false);
+        setShowFlipHint(false);
+        if (flipHintTimer.current) clearTimeout(flipHintTimer.current);
     };
 
     return (
         <tr
             ref={(el) => { rowRefs.current[card.id] = el; }}
-            draggable
+            onDragEnter={(e) => onDragEnter(e, index)}
+            onDragOver={(e) => onDragOver(e, index)}
+            onDrop={(e) => onDrop(e, index)}
             onDragStart={(e) => onDragStart(e, card)}
+            onDragEnd={onDragEnd}
             onMouseEnter={onHover}
             onMouseLeave={onLeave}
-            className="hover:bg-blue-50/40 cursor-grab active:cursor-grabbing"
-            style={{
-                transform: animateY !== 0 ? `translateY(${animateY}px)` : undefined,
-                transition: animateY !== 0 ? 'transform 0.2s ease-in-out' : undefined,
-                position: 'relative',
-                zIndex: animateY !== 0 ? 10 : undefined,
-            }}
+            className={`hover:bg-blue-50/40 border-b border-gray-50 group/row transition-all duration-300 ease-out h-[45px] ${shiftY !== 0 ? 'z-10 relative' : ''} ${isDragged ? 'opacity-40 bg-blue-50/20' : 'opacity-100'}`}
+            style={{ transform: shiftY ? `translateY(${shiftY}px)` : undefined }}
         >
+            <td className="px-2 py-2 text-center">
+                <div
+                    draggable
+                    onDragStart={(e) => onDragStart(e, card)}
+                    className="cursor-grab active:cursor-grabbing text-gray-300 hover:text-blue-500 transition-colors py-1"
+                    title="Drag to reorder"
+                >
+                    ⠿
+                </div>
+            </td>
             <td className="px-4 py-2 text-sm text-gray-400">{index + 1}</td>
             <td className="px-2 py-2 text-center">
                 <span
@@ -1254,12 +1946,13 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
                     onMouseEnter={handlePreviewEnter}
                     onMouseMove={handlePreviewMove}
                     onMouseLeave={handlePreviewLeave}
+                    onClick={handleToggleFlip}
                 >
                     👁
                 </span>
-                {showPreview && (
+                {showPreview && typeof document !== 'undefined' && createPortal(
                     <div
-                        className="fixed z-50 pointer-events-none"
+                        className="fixed z-[100] pointer-events-none group/preview"
                         style={{ left: previewPos.x, top: previewPos.y }}
                     >
                         {previewLoading ? (
@@ -1267,14 +1960,26 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
                                 Loading...
                             </div>
                         ) : (
-                            <img
-                                src={previewImg || '/placeholder.png'}
-                                alt={card.card_name}
-                                className="rounded-lg shadow-xl border border-gray-200"
-                                style={{ width: 250, height: 'auto' }}
-                            />
+                            <div className="relative">
+                                <img
+                                    src={previewImages[faceIndex] || '/placeholder.png'}
+                                    alt={card.card_name}
+                                    className="rounded-lg shadow-2xl border border-white/20 transition-transform duration-150 ease-in-out"
+                                    style={{
+                                        width: 250,
+                                        height: 'auto',
+                                        transform: isFlipping ? 'scaleX(0)' : 'scaleX(1)'
+                                    }}
+                                />
+                                {previewImages.length > 1 && showFlipHint && (
+                                    <div className="absolute bottom-4 right-4 bg-black/60 text-white px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider backdrop-blur-sm border border-white/20 animate-in fade-in duration-300">
+                                        Click 👁 to flip
+                                    </div>
+                                )}
+                            </div>
                         )}
-                    </div>
+                    </div>,
+                    document.body
                 )}
             </td>
             <td className="px-4 py-2">
@@ -1308,28 +2013,13 @@ function CardRow({ card, index, isFirst, isLast, onUpdate, onDelete, onMove, ani
                     </span>
                 )}
             </td>
-            <td className="px-4 py-2">
-                <div className="flex gap-1">
-                    <button
-                        onClick={() => onMove(card, 'up')}
-                        disabled={isFirst}
-                        className="cursor-pointer text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs px-1"
-                        title="Move up"
-                    >▲</button>
-                    <button
-                        onClick={() => onMove(card, 'down')}
-                        disabled={isLast}
-                        className="cursor-pointer text-gray-400 hover:text-gray-700 disabled:opacity-30 text-xs px-1"
-                        title="Move down"
-                    >▼</button>
-                </div>
-            </td>
-            <td className="px-4 py-2">
+            <td className="px-4 py-2 text-right">
                 <button
                     onClick={() => onDelete(card.id)}
-                    className="cursor-pointer text-red-400 hover:text-red-600 transition-colors text-xs font-medium"
+                    className="p-1 px-2 bg-red-50 text-red-500 hover:bg-red-500 hover:text-white rounded transition-colors cursor-pointer"
+                    title="Delete card"
                 >
-                    ✕
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
                 </button>
             </td>
         </tr>
