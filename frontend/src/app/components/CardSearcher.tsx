@@ -30,7 +30,11 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
     const [results, setResults] = useState<ScryfallCard[]>([]);
     const [loading, setLoading] = useState(false);
     const [touched, setTouched] = useState(false);
-    const [gridScale, setGridScale] = useState(2.15);
+    const [gridScale, setGridScale] = useState(2.25);
+
+    useEffect(() => {
+        console.log("grid scale changed", gridScale);
+    }, [gridScale]);
 
     // localQuantities tracks the visual state, including non-synced changes
     const [localQuantities, setLocalQuantities] = useState<Record<string, number>>({});
@@ -135,14 +139,14 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                         </h2>
                         <div className="flex items-center gap-2 bg-white/40 px-1 py-1 rounded-lg border border-white/40 shadow-sm ml-4">
                             <button
-                                onClick={() => setGridScale(2.15)}
+                                onClick={() => setGridScale(2.25)}
                                 className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale < 2.3 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                                 title="Default Size"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line><line x1="8" y1="11" x2="14" y2="11"></line></svg>
                             </button>
                             <button
-                                onClick={() => setGridScale(2.45)}
+                                onClick={() => setGridScale(2.65)}
                                 className={`w-14 h-8 flex items-center justify-center rounded-md transition-all ${gridScale >= 2.3 ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                                 title="Zoomed Size"
                             >
@@ -211,7 +215,8 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                         return (
                             <div
                                 key={card.id}
-                                className="group relative flex flex-col bg-white rounded-xl border border-gray-100 shadow-sm transition-all hover:shadow-xl hover:border-blue-200 hover:-translate-y-1 overflow-hidden"
+                                className="group relative flex flex-col bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden transition-[width,transform] duration-75 ease-in-out" // (This is your $1 class)
+                                style={{ width: Math.round(100 * gridScale) }}
                             >
                                 <div className="aspect-[63/88] bg-gray-50 relative flex items-center justify-center overflow-hidden">
                                     {imgUrl ? (
@@ -240,7 +245,7 @@ export default function CardSearcher({ onSyncQuantity, onClose, existingQuantiti
                                     )}
 
                                     {/* Overlay Action */}
-                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3">
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col justify-end p-3 backdrop-blur-[2px]">
                                         <div className="flex items-center justify-between bg-white/20 backdrop-blur-md rounded-xl p-2 border border-white/30 shadow-xl overflow-hidden">
                                             <button
                                                 onClick={() => handleAdjustQuantity(card.name, -1)}

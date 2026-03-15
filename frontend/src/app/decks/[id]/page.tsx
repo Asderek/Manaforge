@@ -122,6 +122,7 @@ export default function DeckEditorPage() {
 
     // Tracking for keyboard shortcuts
     const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
+    const [hoverInfo, setHoverInfo] = useState<{ category: string, index: number } | null>(null);
     const categoryDebounceTimer = useRef<NodeJS.Timeout | null>(null);
 
     // Scryfall data cache: card_name -> { images: string[]; typeLine?: string }
@@ -541,6 +542,21 @@ export default function DeckEditorPage() {
             cards: groups[cat]
         }));
     }, [deck?.cards, customCategories, categoryOrder, sortMode, customCardOrder]);
+
+    // ── SRM Fix: Re-evaluate hover state when deck changes ──
+    useEffect(() => {
+        if (!hoverInfo || !deck) return;
+        const { category, index } = hoverInfo;
+        const catGroup = groupedCards.find(g => g.category === category);
+        if (catGroup && catGroup.cards[index]) {
+            const currentCardId = catGroup.cards[index].id;
+            if (currentCardId !== hoveredCardId) {
+                setHoveredCardId(currentCardId);
+            }
+        } else {
+            setHoveredCardId(null);
+        }
+    }, [deck, hoverInfo, hoveredCardId, groupedCards]);
 
 
 
@@ -1010,7 +1026,6 @@ export default function DeckEditorPage() {
         );
     }
 
-    // Put this right before your return statement
     const hasSingleCategory = groupedCards.length === 1;
 
     return (
@@ -1237,7 +1252,10 @@ export default function DeckEditorPage() {
                                         scryfallCache={scryfallCache}
                                         onDragStart={handleDragStart}
                                         onDragEnd={() => setDraggedCardId(null)}
-                                        onHoverCard={setHoveredCardId}
+                                        onHoverCard={(id: string | null, index?: number) => {
+                                            setHoveredCardId(id);
+                                            setHoverInfo(id ? { category, index: index ?? 0 } : null);
+                                        }}
                                         onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
                                     />
                                 );
@@ -1274,7 +1292,10 @@ export default function DeckEditorPage() {
                                         scryfallCache={scryfallCache}
                                         scale={gridScale}
                                         onDragStart={handleDragStart}
-                                        onHoverCard={setHoveredCardId}
+                                        onHoverCard={(id: string | null, index?: number) => {
+                                            setHoveredCardId(id);
+                                            setHoverInfo(id ? { category, index: index ?? 0 } : null);
+                                        }}
                                         onDrop={(e, dropIdx) => handleCardDrop(e, category, dropIdx)}
                                         draggedCardId={draggedCardId}
                                         isExpanded={!!expandedGrids[category]}
@@ -1503,7 +1524,7 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
     scryfallCache: React.MutableRefObject<Record<string, { images: string[]; typeLine?: string }>>;
     scale: number;
     onDragStart: (e: React.DragEvent, card: Card) => void;
-    onHoverCard: (id: string | null) => void;
+    onHoverCard: (id: string | null, index?: number) => void;
     onDrop: (e: React.DragEvent, index?: number) => void;
     draggedCardId: string | null;
     isExpanded: boolean;
@@ -1600,7 +1621,7 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
                         onDragStart={onDragStart}
                         onDragOver={handleDragOver}
                         onDrop={handleDrop}
-                        onHover={() => onHoverCard(card.id)}
+                        onHover={(idx: number) => onHoverCard(card.id, idx)}
                         onLeave={() => onHoverCard(null)}
                     />
                 );
@@ -1609,7 +1630,6 @@ function GridView({ cards, onUpdate, onDelete, scryfallCache, scale, onDragStart
     );
 }
 
-// ── Table View Components ──
 // ── Table View Components ──
 function TableView({ categoryName, cards, draggedCardId, isForeign, onUpdate, onDelete, rowRefs, scryfallCache, onDragStart, onDragEnd, onHoverCard, onDrop }: {
     categoryName: string;
@@ -1622,7 +1642,7 @@ function TableView({ categoryName, cards, draggedCardId, isForeign, onUpdate, on
     scryfallCache: React.MutableRefObject<Record<string, { images: string[]; typeLine?: string }>>;
     onDragStart: (e: React.DragEvent, card: Card) => void;
     onDragEnd: () => void;
-    onHoverCard: (id: string | null) => void;
+    onHoverCard: (id: string | null, index?: number) => void;
     onDrop: (e: React.DragEvent, index?: number) => void;
 }) {
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
@@ -1765,7 +1785,7 @@ function TableView({ categoryName, cards, draggedCardId, isForeign, onUpdate, on
                             onDragEnter={(e) => !isDragged && handleDragOver(e, idx)}
                             onDragOver={(e) => !isDragged && handleDragOver(e, idx)}
                             onDrop={(e) => !isDragged && handleDrop(e, idx)}
-                            onHover={() => onHoverCard(card.id)}
+                            onHover={() => onHoverCard(card.id, idx)}
                             onLeave={() => onHoverCard(null)}
                         />
                     );
@@ -1786,7 +1806,7 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, index, shift
     onDragStart: (e: React.DragEvent, card: Card) => void;
     onDragOver: (e: React.DragEvent, index: number) => void;
     onDrop: (e: React.DragEvent, index: number) => void;
-    onHover: () => void;
+    onHover: (index: number) => void;
     onLeave: () => void;
 }) {
     const [images, setImages] = useState<string[]>([]);
@@ -1846,9 +1866,9 @@ function GridCard({ card, onUpdate, onDelete, scryfallCache, scale, index, shift
             onDragStart={(e) => onDragStart(e, card)}
             onDragOver={(e) => onDragOver(e, index)}
             onDrop={(e) => onDrop(e, index)}
-            onMouseEnter={onHover}
+            onMouseEnter={() => onHover(index)}
             onMouseLeave={onLeave}
-            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all duration-300 hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing flex-shrink-0"
+            className="group relative flex flex-col bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden transition-all transition-[width,transform] duration-300 ease-in-out hover:shadow-md hover:border-blue-300 cursor-grab active:cursor-grabbing flex-shrink-0"
             style={{
                 width: Math.round(100 * scale),
                 transform: shift ? `translateX(${shift}px)` : undefined,
@@ -1946,7 +1966,7 @@ function CardRow({ card, index, isFirst, isLast, shiftY, isDragged, onUpdate, on
     onDragEnter: (e: React.DragEvent, index: number) => void;
     onDragOver: (e: React.DragEvent, index: number) => void;
     onDrop: (e: React.DragEvent, index: number) => void;
-    onHover: () => void;
+    onHover: (index: number) => void;
     onLeave: () => void;
 }) {
     const [editingName, setEditingName] = useState(false);
@@ -2044,9 +2064,9 @@ function CardRow({ card, index, isFirst, isLast, shiftY, isDragged, onUpdate, on
             onDrop={(e) => onDrop(e, index)}
             onDragStart={(e) => onDragStart(e, card)}
             onDragEnd={onDragEnd}
-            onMouseEnter={onHover}
+            onMouseEnter={() => onHover(index)}
             onMouseLeave={onLeave}
-            className={`hover:bg-blue-50/40 border-b border-gray-50 group/row transition-all duration-300 ease-out h-[45px] ${shiftY !== 0 ? 'z-10 relative' : ''} ${isDragged ? 'opacity-40 bg-blue-50/20' : 'opacity-100'}`}
+            className={`hover:bg-blue-50/40 border-b border-gray-50 group/row transition-[background-color,opacity] duration-300 ease-out h-[45px] ${shiftY !== 0 ? 'z-10 relative' : ''} ${isDragged ? 'opacity-40 bg-blue-50/20' : 'opacity-100'}`}
             style={{ transform: shiftY ? `translateY(${shiftY}px)` : undefined }}
         >
             <td className="px-2 py-2 text-center">
